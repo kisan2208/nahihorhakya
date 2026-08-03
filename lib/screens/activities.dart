@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../theme.dart';
 import '../glass.dart';
 import 'capture.dart';
+import 'authentic_capture_screen.dart';
 
 /// How often an action can be claimed. Drives the Weekly / One-time filters.
 enum Cadence { weekly, monthly, oneTime }
@@ -162,7 +163,7 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
 
   Widget _card(_Activity a) {
     void start() => Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const CaptureScreen()));
+        .push(MaterialPageRoute(builder: (_) => const AuthenticCaptureScreen()));
 
     return Semantics(
       button: true,

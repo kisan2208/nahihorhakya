@@ -4,6 +4,7 @@ import '../theme.dart';
 import '../glass.dart';
 import '../demo_data.dart';
 import 'capture.dart';
+import 'authentic_capture_screen.dart';
 import 'gci_detail.dart';
 import 'redeem.dart';
 import 'notifications.dart';
@@ -178,7 +179,7 @@ class HomeScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _quickTile(context, Icons.park_rounded, 'Plant a Tree', AppColors.primary,
-                  () => _push(context, const CaptureScreen())),
+                  () => _push(context, const AuthenticCaptureScreen())),
               const SizedBox(width: 12),
               // Both of these flow into the same capture + verify path as
               // trees; they were dead taps before.
