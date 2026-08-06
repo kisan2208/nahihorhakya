@@ -11,7 +11,7 @@ import '../theme.dart';
 import '../glass.dart';
 import '../widgets/geotag_watermark_painter.dart';
 
-/// Screen using real physical hardware camera capture, real-time GeotagService, and 30m proximity warnings.
+/// Screen using real physical hardware camera capture, Google Maps Location & time tracking.
 class AuthenticCaptureScreen extends StatefulWidget {
   const AuthenticCaptureScreen({super.key});
 
@@ -39,6 +39,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   
   bool _isLiveCapture = true;
   bool _isProcessing = false;
+  bool _hasLocationPermission = true;
 
   @override
   void initState() {
@@ -50,12 +51,17 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   }
 
   Future<void> _fetchRealGeotag() async {
+    // Explicitly prompt user for Android location permission
+    final permGranted = await _geotagService.requestLocationPermission();
+    
     final geo = await _geotagService.captureRealGeotag(
       forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
       forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
     );
+    
     if (mounted) {
       setState(() {
+        _hasLocationPermission = permGranted;
         _currentGeotag = geo;
         _evaluateProximity();
       });
@@ -87,7 +93,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     });
   }
 
-  /// Takes real camera photo & captures real-time accurate Geotag location & date/time.
+  /// Takes real camera photo & captures real-time accurate Google Maps location & date/time.
   Future<void> _takePhotoWithCamera() async {
     try {
       final ImageSource source = _isLiveCapture ? ImageSource.camera : ImageSource.gallery;
@@ -102,7 +108,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
       setState(() => _isProcessing = true);
 
-      // Fetch fresh, real-time Geotag location & time
+      // Request fresh hardware location & Google Maps reverse-geocoded address
       final realGeotag = await _geotagService.captureRealGeotag(
         forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
         forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
@@ -175,7 +181,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '✅ Real Photo, Geotag & Time saved to backend! Hash: #${finalPhoto.cryptoHash}',
+            '✅ Real Photo, Google Geotag & Time saved to backend! Hash: #${finalPhoto.cryptoHash}',
           ),
           backgroundColor: AppColors.primary,
         ),
@@ -202,7 +208,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
           children: [
             Text('Authentic Geotag Capture', style: AppTheme.display(16, c: Colors.white)),
             const SizedBox(height: 2),
-            Text('Real Time • Place • Anti-Spoof Proof', style: AppTheme.body(11, c: Colors.white70)),
+            Text('Google Maps Location • Real Time', style: AppTheme.body(11, c: Colors.white70)),
           ],
         ),
         centerTitle: true,
@@ -261,7 +267,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             child: Text(
-                              'Tap camera button below to take a real photo with Geotag & Time',
+                              'Tap camera button below to take a real photo with Google Maps Geotag & Time',
                               textAlign: TextAlign.center,
                               style: AppTheme.body(12, c: Colors.white70),
                             ),
@@ -359,7 +365,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const Spacer(),
 
-              // Geotag Real Location & Time Status Card
+              // Google Maps Location & Geotag Status Card
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: GlassCard(
@@ -370,7 +376,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 16),
+                          const Icon(Icons.map_rounded, color: Colors.greenAccent, size: 16),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -382,7 +388,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                             onTap: () async {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                  content: Text('📍 Fetching real-time hardware GPS location...'),
+                                  content: Text('📍 Requesting Location Permission & Google Maps Address...'),
                                   duration: Duration(seconds: 1),
                                 ),
                               );
@@ -399,10 +405,10 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                               child: const Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.refresh_rounded, color: Colors.greenAccent, size: 11),
+                                  Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 11),
                                   SizedBox(width: 3),
                                   Text(
-                                    'Live GPS (Tap Refresh)',
+                                    'Google Location (Refresh)',
                                     style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
                                   ),
                                 ],
@@ -412,13 +418,20 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                         ],
                       ),
                       const SizedBox(height: 4),
+                      Text(
+                        _currentGeotag.fullFormattedAddress,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white70, fontSize: 10.5),
+                      ),
+                      const SizedBox(height: 4),
                       Row(
                         children: [
-                          const Icon(Icons.access_time_rounded, color: Colors.white70, size: 13),
+                          const Icon(Icons.access_time_rounded, color: Colors.white54, size: 12),
                           const SizedBox(width: 6),
                           Text(
                             _currentGeotag.formattedDateTime,
-                            style: const TextStyle(color: Colors.white70, fontSize: 10.5),
+                            style: const TextStyle(color: Colors.white54, fontSize: 10),
                           ),
                         ],
                       ),
