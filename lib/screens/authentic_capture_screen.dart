@@ -378,16 +378,35 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                               style: AppTheme.body(11, w: FontWeight.bold, c: Colors.white),
                             ),
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.greenAccent),
-                            ),
-                            child: const Text(
-                              'Geotag GPS Active',
-                              style: TextStyle(color: Colors.greenAccent, fontSize: 10),
+                          InkWell(
+                            onTap: () async {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('📍 Fetching real-time hardware GPS location...'),
+                                  duration: Duration(seconds: 1),
+                                ),
+                              );
+                              await _fetchRealGeotag();
+                            },
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.greenAccent),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.refresh_rounded, color: Colors.greenAccent, size: 11),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    'Live GPS (Tap Refresh)',
+                                    style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ],
