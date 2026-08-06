@@ -1,17 +1,17 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:geolocator/geolocator.dart';
 
 import '../models/action_category.dart';
 import '../models/authentic_geo_photo.dart';
 import '../services/ai_verification_service.dart';
 import '../services/eco_action_backend.dart';
+import '../services/geotag_service.dart';
 import '../theme.dart';
 import '../glass.dart';
 import '../widgets/geotag_watermark_painter.dart';
 
-/// Screen using real physical hardware camera capture & real device GPS location.
+/// Screen using real physical hardware camera capture, real-time GeotagService, and 30m proximity warnings.
 class AuthenticCaptureScreen extends StatefulWidget {
   const AuthenticCaptureScreen({super.key});
 
@@ -23,13 +23,14 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   final ImagePicker _picker = ImagePicker();
   final EcoActionBackend _backend = EcoActionBackend();
   final AIVerificationService _aiService = AIVerificationService();
+  final GeotagService _geotagService = GeotagService();
 
   late ActionCategory _selectedCategory;
+  late GeotagData _currentGeotag;
   
-  // Real or Simulated GPS Position
-  double _currentLat = 18.52042;
-  double _currentLng = 73.85673;
-  bool _usingRealGPS = false;
+  bool _usingSimulatedProximity = false;
+  double _simulatedLat = 18.520420;
+  double _simulatedLng = 73.856730;
 
   late ProximityCheckResult _proximityResult;
   
@@ -43,46 +44,32 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   void initState() {
     super.initState();
     _selectedCategory = ActionCategory.defaultCategory;
+    _currentGeotag = GeotagData.defaultFallback();
     _evaluateProximity();
-    _initDeviceLocation();
+    _fetchRealGeotag();
   }
 
-  /// Attempts to fetch real hardware GPS coordinates from phone.
-  Future<void> _initDeviceLocation() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return;
-      }
-      
-      if (permission == LocationPermission.deniedForever) return;
-
-      Position pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-
-      if (mounted) {
-        setState(() {
-          _currentLat = pos.latitude;
-          _currentLng = pos.longitude;
-          _usingRealGPS = true;
-          _evaluateProximity();
-        });
-      }
-    } catch (_) {
-      // Fallback to simulated coordinates if permissions or GPS unavailable
+  Future<void> _fetchRealGeotag() async {
+    final geo = await _geotagService.captureRealGeotag(
+      forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
+      forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
+    );
+    if (mounted) {
+      setState(() {
+        _currentGeotag = geo;
+        _evaluateProximity();
+      });
     }
   }
 
   void _evaluateProximity() {
+    final activeLat = _usingSimulatedProximity ? _simulatedLat : _currentGeotag.latitude;
+    final activeLng = _usingSimulatedProximity ? _simulatedLng : _currentGeotag.longitude;
+
     if (_selectedCategory.requiresProximityCheck) {
       _proximityResult = _backend.check30mProximity(
-        currentLat: _currentLat,
-        currentLng: _currentLng,
+        currentLat: activeLat,
+        currentLng: activeLng,
         categoryId: _selectedCategory.id,
         radiusMeters: _selectedCategory.proximityRadiusMeters,
       );
@@ -100,7 +87,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     });
   }
 
-  /// Triggers the real physical phone camera hardware via ImagePicker.
+  /// Takes real camera photo & captures real-time accurate Geotag location & date/time.
   Future<void> _takePhotoWithCamera() async {
     try {
       final ImageSource source = _isLiveCapture ? ImageSource.camera : ImageSource.gallery;
@@ -111,9 +98,15 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
         maxHeight: 1600,
       );
 
-      if (pickedFile == null) return; // User cancelled capture
+      if (pickedFile == null) return;
 
       setState(() => _isProcessing = true);
+
+      // Fetch fresh, real-time Geotag location & time
+      final realGeotag = await _geotagService.captureRealGeotag(
+        forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
+        forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
+      );
 
       // AI Image Verification
       final aiResult = await _aiService.verifyPhotoIntegrity(
@@ -124,10 +117,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
       final photo = AuthenticGeoPhoto(
         id: 'GEO_${DateTime.now().millisecondsSinceEpoch}',
         category: _selectedCategory,
-        timestamp: DateTime.now(),
-        latitude: _currentLat,
-        longitude: _currentLng,
-        address: _usingRealGPS ? 'Live Device GPS Location' : 'Ward 12, Pune, Maharashtra 411005',
+        geotag: realGeotag,
         isLiveCamera: _isLiveCapture,
         aiVerification: aiResult,
         imagePath: pickedFile.path,
@@ -135,6 +125,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
       setState(() {
         _isProcessing = false;
+        _currentGeotag = realGeotag;
         if (_selectedCategory.requiresDualPhoto && _firstPhoto == null) {
           _firstPhoto = photo;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -169,10 +160,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
         ? AuthenticGeoPhoto(
             id: _firstPhoto!.id,
             category: _firstPhoto!.category,
-            timestamp: _firstPhoto!.timestamp,
-            latitude: _firstPhoto!.latitude,
-            longitude: _firstPhoto!.longitude,
-            address: _firstPhoto!.address,
+            geotag: _firstPhoto!.geotag,
             isLiveCamera: _firstPhoto!.isLiveCamera,
             aiVerification: _firstPhoto!.aiVerification,
             imagePath: _firstPhoto!.imagePath,
@@ -187,7 +175,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '✅ Real Photo & Geotag saved to backend! Hash: #${finalPhoto.cryptoHash}',
+            '✅ Real Photo, Geotag & Time saved to backend! Hash: #${finalPhoto.cryptoHash}',
           ),
           backgroundColor: AppColors.primary,
         ),
@@ -214,7 +202,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
           children: [
             Text('Authentic Geotag Capture', style: AppTheme.display(16, c: Colors.white)),
             const SizedBox(height: 2),
-            Text('Live Phone Camera • Hardware GPS', style: AppTheme.body(11, c: Colors.white70)),
+            Text('Real Time • Place • Anti-Spoof Proof', style: AppTheme.body(11, c: Colors.white70)),
           ],
         ),
         centerTitle: true,
@@ -231,7 +219,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
     return Stack(
       children: [
-        // Camera viewfinder representation
+        // Camera Viewfinder Background
         Positioned.fill(
           child: Container(
             decoration: BoxDecoration(
@@ -273,7 +261,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             child: Text(
-                              'Tap red button below to trigger real hardware camera',
+                              'Tap camera button below to take a real photo with Geotag & Time',
                               textAlign: TextAlign.center,
                               style: AppTheme.body(12, c: Colors.white70),
                             ),
@@ -288,13 +276,13 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
           ),
         ),
 
-        // UI Controls Overlay
+        // Controls Overlay
         SafeArea(
           child: Column(
             children: [
               const SizedBox(height: 8),
 
-              // Category selector bar
+              // Category Bar
               SizedBox(
                 height: 48,
                 child: ListView.separated(
@@ -371,51 +359,64 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const Spacer(),
 
-              // GPS Status Bar
+              // Geotag Real Location & Time Status Card
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: GlassCard(
                   radius: 16,
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.my_location_rounded, color: _usingRealGPS ? Colors.greenAccent : AppColors.accent, size: 16),
+                          const Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 16),
                           const SizedBox(width: 8),
-                          Text(
-                            'GPS: ${_currentLat.toStringAsFixed(5)}°, ${_currentLng.toStringAsFixed(5)}°',
-                            style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white),
+                          Expanded(
+                            child: Text(
+                              _currentGeotag.formattedCoordinates,
+                              style: AppTheme.body(11, w: FontWeight.bold, c: Colors.white),
+                            ),
                           ),
-                          const Spacer(),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(
-                              color: (_usingRealGPS ? Colors.green : Colors.blue).withValues(alpha: 0.2),
+                              color: Colors.green.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: _usingRealGPS ? Colors.greenAccent : AppColors.accent),
+                              border: Border.all(color: Colors.greenAccent),
                             ),
-                            child: Text(
-                              _usingRealGPS ? 'Real Phone GPS' : 'Simulated GPS',
-                              style: TextStyle(color: _usingRealGPS ? Colors.greenAccent : AppColors.accent, fontSize: 10),
+                            child: const Text(
+                              'Geotag GPS Active',
+                              style: TextStyle(color: Colors.greenAccent, fontSize: 10),
                             ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Icon(Icons.access_time_rounded, color: Colors.white70, size: 13),
+                          const SizedBox(width: 6),
+                          Text(
+                            _currentGeotag.formattedDateTime,
+                            style: const TextStyle(color: Colors.white70, fontSize: 10.5),
                           ),
                         ],
                       ),
                       if (_selectedCategory.requiresProximityCheck)
                         Row(
                           children: [
-                            Text('Simulate Proximity:', style: AppTheme.body(11, c: Colors.white70)),
+                            Text('Proximity Test Slider:', style: AppTheme.body(11, c: Colors.white70)),
                             Expanded(
                               child: Slider(
-                                value: _currentLat,
+                                value: _simulatedLat,
                                 min: 18.52040,
                                 max: 18.52180,
                                 activeColor: AppColors.accent,
                                 onChanged: (val) {
                                   setState(() {
-                                    _currentLat = val;
-                                    _usingRealGPS = false;
+                                    _simulatedLat = val;
+                                    _usingSimulatedProximity = true;
                                     _evaluateProximity();
                                   });
                                 },
@@ -438,7 +439,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const SizedBox(height: 16),
 
-              // Hardware Shutter Button Row
+              // Hardware Shutter Button
               Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Row(
@@ -454,7 +455,6 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       },
                     ),
 
-                    // Shutter Button -> Triggers Phone Camera
                     GestureDetector(
                       onTap: _isProcessing ? null : _takePhotoWithCamera,
                       child: Container(

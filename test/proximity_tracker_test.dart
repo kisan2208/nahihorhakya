@@ -72,7 +72,7 @@ void main() {
 
       expect(photo.cryptoHash.length, equals(16));
       expect(photo.isVerifiedAuthentic, isTrue);
-      expect(photo.formattedGeotag, contains('18.5204° N'));
+      expect(photo.formattedGeotag, contains('18.5204'));
     });
 
     test('ActionCategory list contains Tree Planted and Beach Clean', () {

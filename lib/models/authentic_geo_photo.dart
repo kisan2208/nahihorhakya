@@ -2,17 +2,13 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'action_category.dart';
 import '../services/ai_verification_service.dart';
+import '../services/geotag_service.dart';
 
-/// Represents an authentic geotagged photo capture with AI proof.
+/// Represents an authentic geotagged photo capture with AI proof and high-precision GeotagData.
 class AuthenticGeoPhoto {
   final String id;
   final ActionCategory category;
-  final DateTime timestamp;
-  final double latitude;
-  final double longitude;
-  final double altitude;
-  final double accuracyMeters;
-  final String address;
+  final GeotagData geotag;
   final bool isLiveCamera;
   final bool exifIntact;
   final String? imagePath;
@@ -28,12 +24,13 @@ class AuthenticGeoPhoto {
   AuthenticGeoPhoto({
     required this.id,
     required this.category,
-    required this.timestamp,
-    required this.latitude,
-    required this.longitude,
-    this.altitude = 560.0,
-    this.accuracyMeters = 3.5,
-    required this.address,
+    GeotagData? geotag,
+    DateTime? timestamp,
+    double? latitude,
+    double? longitude,
+    double altitude = 560.0,
+    double accuracyMeters = 3.5,
+    String? address,
     this.isLiveCamera = true,
     this.exifIntact = true,
     this.imagePath,
@@ -41,8 +38,34 @@ class AuthenticGeoPhoto {
     AIVerificationResult? aiVerification,
     this.secondaryImagePath,
     this.secondaryTimestamp,
-  })  : cryptoHash = cryptoHash ?? _generateCryptoHash(id, timestamp, latitude, longitude, isLiveCamera),
+  })  : geotag = geotag ??
+            GeotagData(
+              latitude: latitude ?? 18.520420,
+              longitude: longitude ?? 73.856730,
+              altitude: altitude,
+              accuracyMeters: accuracyMeters,
+              streetAddress: address ?? 'Ward 12, Pune',
+              locality: 'Ward 12',
+              city: 'Pune',
+              state: 'Maharashtra',
+              country: 'India',
+              postalCode: '411005',
+              timestamp: timestamp ?? DateTime.now(),
+              timeZoneName: 'IST',
+              timeZoneOffset: 'UTC+05:30',
+            ),
+        cryptoHash = cryptoHash ?? _generateCryptoHash(id, (geotag?.timestamp ?? timestamp ?? DateTime.now()), (geotag?.latitude ?? latitude ?? 18.520420), (geotag?.longitude ?? longitude ?? 73.856730), isLiveCamera),
         aiVerification = aiVerification ?? AIVerificationResult.analyzeImage(imagePath: imagePath ?? '', isLiveCamera: isLiveCamera);
+
+  /// Convenient getters
+  DateTime get timestamp => geotag.timestamp;
+  double get latitude => geotag.latitude;
+  double get longitude => geotag.longitude;
+  double get altitude => geotag.altitude;
+  double get accuracyMeters => geotag.accuracyMeters;
+  String get address => geotag.fullFormattedAddress;
+  String get formattedGeotag => geotag.formattedCoordinates;
+  String get formattedDateTime => geotag.formattedDateTime;
 
   /// Generates a SHA-256 cryptographic verification token anchoring time, location & camera mode.
   static String _generateCryptoHash(
@@ -58,31 +81,6 @@ class AuthenticGeoPhoto {
     return digest.toString().substring(0, 16).toUpperCase();
   }
 
-  /// Formatted Geotag string for visual watermark rendering.
-  String get formattedGeotag {
-    final latDir = latitude >= 0 ? 'N' : 'S';
-    final lngDir = longitude >= 0 ? 'E' : 'W';
-    final latStr = '${latitude.abs().toStringAsFixed(4)}° $latDir';
-    final lngStr = '${longitude.abs().toStringAsFixed(4)}° $lngDir';
-    return '$latStr, $lngStr';
-  }
-
-  /// Formatted date time string for geotag stamp.
-  String get formattedDateTime {
-    final day = timestamp.day.toString().padLeft(2, '0');
-    final month = _monthName(timestamp.month);
-    final year = timestamp.year;
-    final hour = timestamp.hour.toString().padLeft(2, '0');
-    final min = timestamp.minute.toString().padLeft(2, '0');
-    final sec = timestamp.second.toString().padLeft(2, '0');
-    return '$day $month $year • $hour:$min:$sec UTC';
-  }
-
-  static String _monthName(int m) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return months[(m - 1) % 12];
-  }
-
   /// Returns whether this photo passed all authenticity integrity checks.
   bool get isVerifiedAuthentic => isLiveCamera && exifIntact && accuracyMeters <= 20.0 && aiVerification.isRealPhoto;
 
@@ -95,6 +93,8 @@ class AuthenticGeoPhoto {
         'altitude': altitude,
         'accuracyMeters': accuracyMeters,
         'address': address,
+        'formattedGeotag': formattedGeotag,
+        'formattedDateTime': formattedDateTime,
         'isLiveCamera': isLiveCamera,
         'exifIntact': exifIntact,
         'imagePath': imagePath,
