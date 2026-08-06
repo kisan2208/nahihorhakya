@@ -1,4 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
+
 import '../models/action_category.dart';
 import '../models/authentic_geo_photo.dart';
 import '../services/ai_verification_service.dart';
@@ -7,7 +11,7 @@ import '../theme.dart';
 import '../glass.dart';
 import '../widgets/geotag_watermark_painter.dart';
 
-/// Comprehensive Authentic Photo Capture Screen with AI check, dual-photo recycle proof, and 30m tree/beach proximity warning.
+/// Screen using real physical hardware camera capture & real device GPS location.
 class AuthenticCaptureScreen extends StatefulWidget {
   const AuthenticCaptureScreen({super.key});
 
@@ -16,29 +20,62 @@ class AuthenticCaptureScreen extends StatefulWidget {
 }
 
 class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
+  final ImagePicker _picker = ImagePicker();
   final EcoActionBackend _backend = EcoActionBackend();
   final AIVerificationService _aiService = AIVerificationService();
 
   late ActionCategory _selectedCategory;
   
-  // Simulated user GPS position (Default center: Ward 12, Pune)
+  // Real or Simulated GPS Position
   double _currentLat = 18.52042;
   double _currentLng = 73.85673;
+  bool _usingRealGPS = false;
 
   late ProximityCheckResult _proximityResult;
   
-  // Single & Dual Photo states
-  AuthenticGeoPhoto? _firstPhoto; // Single photo or "BEFORE" photo
-  AuthenticGeoPhoto? _secondPhoto; // "AFTER" photo for dual-photo mode (Recycle)
+  AuthenticGeoPhoto? _firstPhoto;
+  AuthenticGeoPhoto? _secondPhoto;
   
   bool _isLiveCapture = true;
-  bool _isAnalyzingAI = false;
+  bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
     _selectedCategory = ActionCategory.defaultCategory;
     _evaluateProximity();
+    _initDeviceLocation();
+  }
+
+  /// Attempts to fetch real hardware GPS coordinates from phone.
+  Future<void> _initDeviceLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) return;
+      }
+      
+      if (permission == LocationPermission.deniedForever) return;
+
+      Position pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+
+      if (mounted) {
+        setState(() {
+          _currentLat = pos.latitude;
+          _currentLng = pos.longitude;
+          _usingRealGPS = true;
+          _evaluateProximity();
+        });
+      }
+    } catch (_) {
+      // Fallback to simulated coordinates if permissions or GPS unavailable
+    }
   }
 
   void _evaluateProximity() {
@@ -63,45 +100,66 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     });
   }
 
-  Future<void> _capturePhoto() async {
-    setState(() => _isAnalyzingAI = true);
+  /// Triggers the real physical phone camera hardware via ImagePicker.
+  Future<void> _takePhotoWithCamera() async {
+    try {
+      final ImageSource source = _isLiveCapture ? ImageSource.camera : ImageSource.gallery;
+      final XFile? pickedFile = await _picker.pickImage(
+        source: source,
+        imageQuality: 90,
+        maxWidth: 1600,
+        maxHeight: 1600,
+      );
 
-    final aiResult = await _aiService.verifyPhotoIntegrity(
-      imagePath: 'simulated_camera_stream.jpg',
-      isLiveCamera: _isLiveCapture,
-    );
+      if (pickedFile == null) return; // User cancelled capture
 
-    final photo = AuthenticGeoPhoto(
-      id: 'GEO_${DateTime.now().millisecondsSinceEpoch}',
-      category: _selectedCategory,
-      timestamp: DateTime.now(),
-      latitude: _currentLat,
-      longitude: _currentLng,
-      address: 'Ward 12, Pune, Maharashtra 411005',
-      isLiveCamera: _isLiveCapture,
-      aiVerification: aiResult,
-      imagePath: 'captured_img_1.jpg',
-    );
+      setState(() => _isProcessing = true);
 
-    setState(() {
-      _isAnalyzingAI = false;
-      if (_selectedCategory.requiresDualPhoto && _firstPhoto == null) {
-        // Step 1 of Dual Photo (BEFORE)
-        _firstPhoto = photo;
+      // AI Image Verification
+      final aiResult = await _aiService.verifyPhotoIntegrity(
+        imagePath: pickedFile.path,
+        isLiveCamera: _isLiveCapture,
+      );
+
+      final photo = AuthenticGeoPhoto(
+        id: 'GEO_${DateTime.now().millisecondsSinceEpoch}',
+        category: _selectedCategory,
+        timestamp: DateTime.now(),
+        latitude: _currentLat,
+        longitude: _currentLng,
+        address: _usingRealGPS ? 'Live Device GPS Location' : 'Ward 12, Pune, Maharashtra 411005',
+        isLiveCamera: _isLiveCapture,
+        aiVerification: aiResult,
+        imagePath: pickedFile.path,
+      );
+
+      setState(() {
+        _isProcessing = false;
+        if (_selectedCategory.requiresDualPhoto && _firstPhoto == null) {
+          _firstPhoto = photo;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('📸 Step 1 Captured: Product BEFORE Recycling! Now capture Step 2 (AFTER).'),
+              backgroundColor: AppColors.primary,
+            ),
+          );
+        } else if (_selectedCategory.requiresDualPhoto && _firstPhoto != null) {
+          _secondPhoto = photo;
+        } else {
+          _firstPhoto = photo;
+        }
+      });
+    } catch (e) {
+      setState(() => _isProcessing = false);
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('📸 Step 1 Captured: Product BEFORE Recycling! Now capture Step 2 (AFTER).'),
-            backgroundColor: AppColors.primary,
+          SnackBar(
+            content: Text('Camera Error: ${e.toString()}'),
+            backgroundColor: AppColors.danger,
           ),
         );
-      } else if (_selectedCategory.requiresDualPhoto && _firstPhoto != null) {
-        // Step 2 of Dual Photo (AFTER)
-        _secondPhoto = photo;
-      } else {
-        // Single Photo mode (Tree, Beach Clean, Compost, Segregate)
-        _firstPhoto = photo;
       }
-    });
+    }
   }
 
   Future<void> _submitToBackend() async {
@@ -129,7 +187,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '✅ Authentic ${finalPhoto.category.title} submitted to backend! Crypto Hash: #${finalPhoto.cryptoHash}',
+            '✅ Real Photo & Geotag saved to backend! Hash: #${finalPhoto.cryptoHash}',
           ),
           backgroundColor: AppColors.primary,
         ),
@@ -154,15 +212,9 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
         ),
         title: Column(
           children: [
-            Text(
-              'Authentic Geotag Capture',
-              style: AppTheme.display(16, c: Colors.white),
-            ),
+            Text('Authentic Geotag Capture', style: AppTheme.display(16, c: Colors.white)),
             const SizedBox(height: 2),
-            Text(
-              'Time • Place • AI Authenticity Proof',
-              style: AppTheme.body(11, c: Colors.white70),
-            ),
+            Text('Live Phone Camera • Hardware GPS', style: AppTheme.body(11, c: Colors.white70)),
           ],
         ),
         centerTitle: true,
@@ -171,16 +223,15 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     );
   }
 
-  /// Camera capture viewfinder UI.
   Widget _buildCameraCaptureView() {
     final isDualMode = _selectedCategory.requiresDualPhoto;
     final currentStepLabel = isDualMode
-        ? (_firstPhoto == null ? 'Photo 1 of 2: Capture Product BEFORE Recycling' : 'Photo 2 of 2: Capture Product AFTER Recycling')
-        : 'Capture 1 Authentic Photo';
+        ? (_firstPhoto == null ? 'Photo 1 of 2: Take Picture BEFORE Recycling' : 'Photo 2 of 2: Take Picture AFTER Recycling')
+        : 'Tap Shutter to Open Phone Camera';
 
     return Stack(
       children: [
-        // Camera Viewfinder Background
+        // Camera viewfinder representation
         Positioned.fill(
           child: Container(
             decoration: BoxDecoration(
@@ -213,6 +264,23 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       ),
                       borderRadius: BorderRadius.circular(24),
                     ),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.camera_alt_rounded, color: Colors.white.withValues(alpha: 0.6), size: 48),
+                          const SizedBox(height: 12),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Text(
+                              'Tap red button below to trigger real hardware camera',
+                              textAlign: TextAlign.center,
+                              style: AppTheme.body(12, c: Colors.white70),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -220,13 +288,13 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
           ),
         ),
 
-        // Controls Overlay
+        // UI Controls Overlay
         SafeArea(
           child: Column(
             children: [
               const SizedBox(height: 8),
 
-              // 1. Category Selector Bar
+              // Category selector bar
               SizedBox(
                 height: 48,
                 child: ListView.separated(
@@ -260,7 +328,6 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const SizedBox(height: 10),
 
-              // Step Indicator Pill for Dual Photo
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
@@ -268,15 +335,12 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: AppColors.accent),
                 ),
-                child: Text(
-                  currentStepLabel,
-                  style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white),
-                ),
+                child: Text(currentStepLabel, style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white)),
               ),
 
               const SizedBox(height: 8),
 
-              // 2. 30-Meter Proximity Warning Banner (Tree Planting & Beach Clean ONLY)
+              // 30m Proximity Banner
               if (_selectedCategory.requiresProximityCheck && _proximityResult.hasNearbyAction)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -285,25 +349,18 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.danger.withValues(alpha: 0.95),
                       borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 3))],
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 28),
+                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 26),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '30m Proximity Duplicate Warning',
-                                style: AppTheme.body(12, w: FontWeight.bold, c: Colors.white),
-                              ),
+                              Text('30m Proximity Duplicate Warning', style: AppTheme.body(12, w: FontWeight.bold, c: Colors.white)),
                               const SizedBox(height: 2),
-                              Text(
-                                _proximityResult.warningMessage,
-                                style: AppTheme.body(10.5, c: Colors.white.withValues(alpha: 0.9)),
-                              ),
+                              Text(_proximityResult.warningMessage, style: AppTheme.body(10.5, c: Colors.white.withValues(alpha: 0.9))),
                             ],
                           ),
                         ),
@@ -314,7 +371,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const Spacer(),
 
-              // 3. Location Simulation & GPS Status Card
+              // GPS Status Bar
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: GlassCard(
@@ -324,7 +381,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.my_location_rounded, color: AppColors.accent, size: 16),
+                          Icon(Icons.my_location_rounded, color: _usingRealGPS ? Colors.greenAccent : AppColors.accent, size: 16),
                           const SizedBox(width: 8),
                           Text(
                             'GPS: ${_currentLat.toStringAsFixed(5)}°, ${_currentLng.toStringAsFixed(5)}°',
@@ -334,18 +391,17 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.2),
+                              color: (_usingRealGPS ? Colors.green : Colors.blue).withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.greenAccent),
+                              border: Border.all(color: _usingRealGPS ? Colors.greenAccent : AppColors.accent),
                             ),
-                            child: const Text(
-                              'Authentic GPS',
-                              style: TextStyle(color: Colors.greenAccent, fontSize: 10),
+                            child: Text(
+                              _usingRealGPS ? 'Real Phone GPS' : 'Simulated GPS',
+                              style: TextStyle(color: _usingRealGPS ? Colors.greenAccent : AppColors.accent, fontSize: 10),
                             ),
                           ),
                         ],
                       ),
-                      // Distance Slider for Testing 30m Rule on Tree / Beach Clean
                       if (_selectedCategory.requiresProximityCheck)
                         Row(
                           children: [
@@ -353,21 +409,20 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                             Expanded(
                               child: Slider(
                                 value: _currentLat,
-                                min: 18.52040, // 5m near anchor
-                                max: 18.52180, // ~160m away
+                                min: 18.52040,
+                                max: 18.52180,
                                 activeColor: AppColors.accent,
                                 onChanged: (val) {
                                   setState(() {
                                     _currentLat = val;
+                                    _usingRealGPS = false;
                                     _evaluateProximity();
                                   });
                                 },
                               ),
                             ),
                             Text(
-                              _proximityResult.hasNearbyAction
-                                  ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m'
-                                  : '>30m Clear',
+                              _proximityResult.hasNearbyAction ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m' : '>30m Clear',
                               style: TextStyle(
                                 color: _proximityResult.hasNearbyAction ? Colors.amber : Colors.greenAccent,
                                 fontSize: 11,
@@ -383,7 +438,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const SizedBox(height: 16),
 
-              // 4. Shutter Control Row
+              // Hardware Shutter Button Row
               Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Row(
@@ -399,12 +454,12 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       },
                     ),
 
-                    // Shutter Button
+                    // Shutter Button -> Triggers Phone Camera
                     GestureDetector(
-                      onTap: _isAnalyzingAI ? null : _capturePhoto,
+                      onTap: _isProcessing ? null : _takePhotoWithCamera,
                       child: Container(
-                        width: 76,
-                        height: 76,
+                        width: 78,
+                        height: 78,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
@@ -419,15 +474,15 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                             color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
                             shape: BoxShape.circle,
                           ),
-                          child: _isAnalyzingAI
+                          child: _isProcessing
                               ? const Padding(
                                   padding: EdgeInsets.all(16),
                                   child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
                                 )
                               : Icon(
-                                  _selectedCategory.icon,
+                                  Icons.camera_alt_rounded,
                                   color: _proximityResult.hasNearbyAction ? Colors.white : _selectedCategory.color,
-                                  size: 32,
+                                  size: 34,
                                 ),
                         ),
                       ),
@@ -444,7 +499,6 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     );
   }
 
-  /// Displays captured result preview (Dual-Photo side-by-side for Recycle, Single-Photo for others).
   Widget _buildResultPreviewView() {
     final isDualMode = _selectedCategory.requiresDualPhoto;
 
@@ -463,7 +517,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                             child: GeotagWatermarkOverlay(
                               photo: _firstPhoto!,
                               customLabel: '1. BEFORE RECYCLE',
-                              child: _photoPlaceholder('Product Before Recycling'),
+                              child: _displayCapturedImage(_firstPhoto!),
                             ),
                           ),
                         ),
@@ -474,7 +528,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                             child: GeotagWatermarkOverlay(
                               photo: _secondPhoto!,
                               customLabel: '2. AFTER RECYCLE',
-                              child: _photoPlaceholder('Processed Product After Recycling'),
+                              child: _displayCapturedImage(_secondPhoto!),
                             ),
                           ),
                         ),
@@ -484,7 +538,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       borderRadius: BorderRadius.circular(24),
                       child: GeotagWatermarkOverlay(
                         photo: _firstPhoto!,
-                        child: _photoPlaceholder('Authentic Geotagged Capture'),
+                        child: _displayCapturedImage(_firstPhoto!),
                       ),
                     ),
             ),
@@ -500,7 +554,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Retake'),
+                    label: const Text('Retake Real Photo'),
                     onPressed: () {
                       setState(() {
                         _firstPhoto = null;
@@ -531,7 +585,15 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     );
   }
 
-  Widget _photoPlaceholder(String label) {
+  Widget _displayCapturedImage(AuthenticGeoPhoto photo) {
+    if (photo.imagePath != null && photo.imagePath!.isNotEmpty && File(photo.imagePath!).existsSync()) {
+      return Image.file(
+        File(photo.imagePath!),
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    }
     return Container(
       width: double.infinity,
       color: const Color(0xFF1E281F),
@@ -539,9 +601,9 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(_selectedCategory.icon, size: 70, color: _selectedCategory.color),
+            Icon(photo.category.icon, size: 70, color: photo.category.color),
             const SizedBox(height: 12),
-            Text(label, style: AppTheme.display(16, c: Colors.white)),
+            Text(photo.category.title, style: AppTheme.display(16, c: Colors.white)),
           ],
         ),
       ),
