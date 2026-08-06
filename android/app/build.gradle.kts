@@ -6,8 +6,7 @@ plugins {
 
 android {
     namespace = "com.greencredit.greencredit"
-    compileSdk = 34
-    buildToolsVersion = "34.0.0"
+    compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -21,7 +20,7 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 21
-        targetSdk = 34
+        targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
