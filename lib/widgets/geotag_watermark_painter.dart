@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/authentic_geo_photo.dart';
 
-/// Renders an authentic geotag stamp watermark with AI Real score over photo previews.
+/// Renders an authentic "GPS Map Camera" geotag stamp with Google Maps Satellite thumbnail,
+/// multi-line detailed address, exact Lat/Long coordinates, and AI authenticity score.
 class GeotagWatermarkOverlay extends StatelessWidget {
   final AuthenticGeoPhoto photo;
   final Widget child;
@@ -17,12 +18,13 @@ class GeotagWatermarkOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ai = photo.aiVerification;
+    final geo = photo.geotag;
 
     return Stack(
       children: [
         child,
-        
-        // Top-Right Cryptographic & AI Authenticity Badge
+
+        // Top-Right AI Authenticity Score & Crypto Proof Token
         Positioned(
           top: 14,
           right: 14,
@@ -32,7 +34,7 @@ class GeotagWatermarkOverlay extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.8),
+                  color: Colors.black.withValues(alpha: 0.85),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: ai.isRealPhoto ? const Color(0xFF00E676) : Colors.orangeAccent,
@@ -102,126 +104,194 @@ class GeotagWatermarkOverlay extends StatelessWidget {
             ),
           ),
 
-        // Bottom Geotag Watermark Bar
+        // Bottom "GPS Map Camera" Geotag Watermark Overlay Card
         Positioned(
-          left: 12,
-          right: 12,
-          bottom: 12,
+          left: 10,
+          right: 10,
+          bottom: 10,
           child: Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.8),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+              color: Colors.black.withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  blurRadius: 10,
+                  color: Colors.black.withValues(alpha: 0.6),
+                  blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
               ],
             ),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: photo.category.color,
-                        borderRadius: BorderRadius.circular(12),
+                // Google Maps Satellite Thumbnail Preview Box
+                Container(
+                  width: 95,
+                  height: 95,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white54, width: 1.2),
+                    image: const DecorationImage(
+                      image: NetworkImage(
+                        'https://tile.openstreetmap.org/17/93863/56241.png',
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      fit: BoxFit.cover,
+                      onError: null,
+                    ),
+                    color: const Color(0xFF1E2D1F),
+                  ),
+                  child: Stack(
+                    children: [
+                      // Dark Satellite Overlay Grid Pattern
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(9),
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.1),
+                              Colors.black.withValues(alpha: 0.4),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Center Red Google Pin Marker
+                      const Center(
+                        child: Icon(
+                          Icons.location_on,
+                          color: Colors.redAccent,
+                          size: 32,
+                          shadows: [
+                            Shadow(color: Colors.black87, blurRadius: 6),
+                          ],
+                        ),
+                      ),
+                      // Google Logo Branding at Bottom Left
+                      Positioned(
+                        left: 4,
+                        bottom: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Google',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(width: 10),
+
+                // Multi-line Detailed Google Maps Location & Timestamp Details
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Top Row: GPS Map Camera Badge
+                      Row(
                         children: [
-                          Icon(photo.category.icon, size: 12, color: Colors.white),
-                          const SizedBox(width: 4),
-                          Text(
-                            photo.category.title.toUpperCase(),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.camera_alt, color: Colors.blueAccent, size: 10),
+                                SizedBox(width: 3),
+                                Text(
+                                  'GPS Map Camera',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
-                    ),
-                    const Spacer(),
-                    Icon(
-                      photo.isLiveCamera ? Icons.camera_alt_rounded : Icons.photo_library_rounded,
-                      size: 13,
-                      color: photo.isLiveCamera ? Colors.greenAccent : Colors.orangeAccent,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      photo.isLiveCamera ? 'Live In-App Photo' : 'Gallery Upload',
-                      style: TextStyle(
-                        color: photo.isLiveCamera ? Colors.greenAccent : Colors.orangeAccent,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(Icons.location_on_rounded, size: 14, color: Colors.redAccent),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        photo.formattedGeotag,
+
+                      const SizedBox(height: 2),
+
+                      // City, State, Country Header Line
+                      Text(
+                        '${geo.city}, ${geo.state}, ${geo.country} 🇮🇳',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 12,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.bold,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+
+                      const SizedBox(height: 3),
+
+                      // Full Detailed Street Address (Multi-line)
+                      Text(
+                        geo.fullFormattedAddress,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 10,
+                          height: 1.2,
+                        ),
+                      ),
+
+                      const SizedBox(height: 4),
+
+                      // Latitude & Longitude Line
+                      Text(
+                        'Lat ${photo.latitude.abs().toStringAsFixed(6)}° Long ${photo.longitude.abs().toStringAsFixed(6)}°',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
                           fontFamily: 'monospace',
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.access_time_rounded, size: 13, color: Colors.white70),
-                    const SizedBox(width: 6),
-                    Text(
-                      photo.formattedDateTime,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 10.5,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      'Accuracy: ±${photo.accuracyMeters.toStringAsFixed(1)}m',
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 10,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.map_rounded, size: 12, color: Colors.white54),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        photo.address,
+
+                      const SizedBox(height: 2),
+
+                      // Day, Full Date & GMT Timestamp Line
+                      Text(
+                        '${_dayOfWeek(photo.timestamp)}, ${_formatDateSlash(photo.timestamp)} ${_formatTimeAmPm(photo.timestamp)} ${geo.timeZoneOffset.replaceAll('UTC', 'GMT')}',
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Colors.white60,
-                          fontSize: 10,
+                          color: Colors.white70,
+                          fontSize: 9.5,
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -229,5 +299,24 @@ class GeotagWatermarkOverlay extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  static String _dayOfWeek(DateTime dt) {
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    return days[(dt.weekday - 1) % 7];
+  }
+
+  static String _formatDateSlash(DateTime dt) {
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    return '$d/$m/${dt.year}';
+  }
+
+  static String _formatTimeAmPm(DateTime dt) {
+    final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final second = dt.second.toString().padLeft(2, '0');
+    final amPm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '${hour.toString().padLeft(2, '0')}:$minute:$second $amPm';
   }
 }
