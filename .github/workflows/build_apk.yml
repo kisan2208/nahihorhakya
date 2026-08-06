@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main, master, feature/model-for-test ]
+    branches: [ main, master, feature/model-for-test, featuer/woking ]
   workflow_dispatch:
 
 jobs:
