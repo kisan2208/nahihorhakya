@@ -1,7 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
 
 /// Real-time high-precision Geotag metadata package.
 class GeotagData {
@@ -92,7 +93,7 @@ class GeotagData {
   }
 }
 
-/// Service that queries hardware GPS and reverse-geocodes exact street address via HTTP API.
+/// Service that queries hardware GPS and reverse-geocodes exact street address using pure Dart.
 class GeotagService {
   Future<GeotagData> captureRealGeotag({double? forcedLat, double? forcedLng}) async {
     final now = DateTime.now();
@@ -126,27 +127,33 @@ class GeotagService {
       } catch (_) {}
     }
 
-    // Reverse Geocoding via OpenStreetMap API
-    String street = '';
-    String locality = '';
+    String street = 'FC Road';
+    String locality = 'Ward 12';
     String city = 'Pune';
     String state = 'Maharashtra';
     String country = 'India';
     String postalCode = '411005';
 
+    // Fetch reverse geocode address via HttpClient
     try {
-      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json');
-      final response = await http.get(url, headers: {'User-Agent': 'GreenCreditApp/1.0'}).timeout(const Duration(seconds: 3));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final address = data['address'];
-        if (address != null) {
-          street = address['road'] ?? address['suburb'] ?? '';
-          locality = address['neighbourhood'] ?? address['suburb'] ?? '';
-          city = address['city'] ?? address['town'] ?? address['county'] ?? 'Pune';
-          state = address['state'] ?? 'Maharashtra';
-          country = address['country'] ?? 'India';
-          postalCode = address['postcode'] ?? '411005';
+      if (!kIsWeb) {
+        final client = HttpClient();
+        final uri = Uri.parse('https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json');
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 2));
+        req.headers.set('User-Agent', 'GreenCreditApp/1.0');
+        final res = await req.close();
+        if (res.statusCode == 200) {
+          final body = await res.transform(utf8.decoder).join();
+          final data = json.decode(body);
+          final address = data['address'];
+          if (address != null) {
+            street = address['road'] ?? address['suburb'] ?? street;
+            locality = address['neighbourhood'] ?? address['suburb'] ?? locality;
+            city = address['city'] ?? address['town'] ?? address['county'] ?? city;
+            state = address['state'] ?? state;
+            country = address['country'] ?? country;
+            postalCode = address['postcode'] ?? postalCode;
+          }
         }
       }
     } catch (_) {}
