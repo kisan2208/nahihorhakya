@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
 
 /// Real-time high-precision Geotag metadata package.
@@ -93,7 +92,7 @@ class GeotagData {
   }
 }
 
-/// Service that queries hardware GPS and reverse-geocodes exact street address.
+/// Service that queries hardware GPS and reverse-geocodes exact street address via HTTP API.
 class GeotagService {
   Future<GeotagData> captureRealGeotag({double? forcedLat, double? forcedLng}) async {
     final now = DateTime.now();
@@ -105,7 +104,7 @@ class GeotagService {
     double altitude = 560.0;
     double accuracy = 3.5;
 
-    // If not forced simulation, fetch real hardware GPS
+    // Fetch real hardware GPS position
     if (forcedLat == null && forcedLng == null && !kIsWeb) {
       try {
         bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -124,12 +123,10 @@ class GeotagService {
             accuracy = pos.accuracy;
           }
         }
-      } catch (_) {
-        // Fallback if hardware GPS unavailable
-      }
+      } catch (_) {}
     }
 
-    // Reverse Geocoding: Translate Lat/Lng to real street address
+    // Reverse Geocoding via OpenStreetMap API
     String street = '';
     String locality = '';
     String city = 'Pune';
@@ -138,37 +135,21 @@ class GeotagService {
     String postalCode = '411005';
 
     try {
-      if (!kIsWeb) {
-        List<Placemark> placemarks = await placemarkFromCoordinates(lat, lng);
-        if (placemarks.isNotEmpty) {
-          final place = placemarks.first;
-          street = place.street ?? place.name ?? '';
-          locality = place.subLocality ?? place.locality ?? '';
-          city = place.locality ?? place.subAdministrativeArea ?? 'Pune';
-          state = place.administrativeArea ?? 'Maharashtra';
-          country = place.country ?? 'India';
-          postalCode = place.postalCode ?? '411005';
+      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json');
+      final response = await http.get(url, headers: {'User-Agent': 'GreenCreditApp/1.0'}).timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final address = data['address'];
+        if (address != null) {
+          street = address['road'] ?? address['suburb'] ?? '';
+          locality = address['neighbourhood'] ?? address['suburb'] ?? '';
+          city = address['city'] ?? address['town'] ?? address['county'] ?? 'Pune';
+          state = address['state'] ?? 'Maharashtra';
+          country = address['country'] ?? 'India';
+          postalCode = address['postcode'] ?? '411005';
         }
       }
-    } catch (_) {
-      // Fallback via OpenStreetMap Nominatim reverse API if native placemark fails
-      try {
-        final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json');
-        final response = await http.get(url, headers: {'User-Agent': 'GreenCreditFlutterApp/1.0'});
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final address = data['address'];
-          if (address != null) {
-            street = address['road'] ?? address['suburb'] ?? '';
-            locality = address['neighbourhood'] ?? address['suburb'] ?? '';
-            city = address['city'] ?? address['town'] ?? address['county'] ?? 'Pune';
-            state = address['state'] ?? 'Maharashtra';
-            country = address['country'] ?? 'India';
-            postalCode = address['postcode'] ?? '411005';
-          }
-        }
-      } catch (_) {}
-    }
+    } catch (_) {}
 
     return GeotagData(
       latitude: lat,
