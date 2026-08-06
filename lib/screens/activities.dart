@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../theme.dart';
 import '../glass.dart';
-import 'capture.dart';
 import 'authentic_capture_screen.dart';
 
-/// How often an action can be claimed. Drives the Weekly / One-time filters.
+/// Cadence filtering.
 enum Cadence { weekly, monthly, oneTime }
 
 class _Activity {
@@ -15,8 +14,6 @@ class _Activity {
   final String proof;
   final Color color;
   final Cadence cadence;
-
-  /// Peak credits this action can yield, used by the High-value filter.
   final int maxCredits;
 
   const _Activity({
@@ -40,9 +37,7 @@ class ActivitiesScreen extends StatefulWidget {
 class _ActivitiesScreenState extends State<ActivitiesScreen> {
   int _filter = 0;
 
-  /// Credits at or above which an action counts as high-value.
   static const _highValueFloor = 100;
-
   static const _filters = ['All', 'Weekly', 'One-time', 'High-value'];
 
   static const _acts = [
@@ -50,7 +45,7 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
       icon: Icons.park_rounded,
       title: 'Plant & maintain a tree',
       reward: 'up to 100 credits',
-      proof: 'Geo-photo + check-ins',
+      proof: 'Geo-photo + 30m check',
       color: AppColors.primary,
       cadence: Cadence.oneTime,
       maxCredits: 100,
@@ -65,10 +60,10 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
       maxCredits: 10,
     ),
     _Activity(
-      icon: Icons.devices_other_rounded,
+      icon: Icons.recycling_rounded,
       title: 'Recycle e-waste',
       reward: '150 credits',
-      proof: 'Municipal sign-off',
+      proof: '2 Photos: Before & After',
       color: AppColors.primaryDark,
       cadence: Cadence.oneTime,
       maxCredits: 150,
@@ -78,7 +73,7 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
       title: 'Compost kitchen waste',
       reward: '80 / month',
       proof: 'Photo + peer',
-      color: AppColors.primary,
+      color: Color(0xFF795548),
       cadence: Cadence.monthly,
       maxCredits: 80,
     ),
@@ -86,77 +81,74 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
       icon: Icons.cleaning_services_rounded,
       title: 'Join a cleanliness drive',
       reward: '75 credits',
-      proof: 'QR',
-      color: AppColors.amber,
+      proof: 'Beach drive + 30m check',
+      color: Color(0xFF0288D1),
       cadence: Cadence.oneTime,
       maxCredits: 75,
     ),
   ];
 
-  List<_Activity> get _visible => switch (_filter) {
-        1 => _acts.where((a) => a.cadence == Cadence.weekly).toList(),
-        2 => _acts.where((a) => a.cadence == Cadence.oneTime).toList(),
-        3 => _acts.where((a) => a.maxCredits >= _highValueFloor).toList(),
-        _ => _acts,
-      };
+  Iterable<_Activity> get _visibleActs {
+    switch (_filter) {
+      case 1:
+        return _acts.where((a) => a.cadence == Cadence.weekly);
+      case 2:
+        return _acts.where((a) => a.cadence == Cadence.oneTime);
+      case 3:
+        return _acts.where((a) => a.maxCredits >= _highValueFloor);
+      default:
+        return _acts;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final visible = _visible;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
       children: [
-        Semantics(header: true, child: Text('Earn Credits', style: AppTheme.display(26))),
-        const SizedBox(height: 4),
+        Semantics(header: true, child: Text('Earn Credits', style: AppTheme.display(24))),
+        const SizedBox(height: 2),
         Text('Verified actions that count toward your GCI',
-            style: AppTheme.body(13.5, c: AppColors.muted)),
+            style: AppTheme.body(13, c: AppColors.muted)),
         const SizedBox(height: 16),
-        SizedBox(
-          // Grows with the OS text-size setting so the chips are never clipped.
-          height: 38 * MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.6),
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _filters.length,
-            separatorBuilder: (_, i) => const SizedBox(width: 8),
-            itemBuilder: (_, i) => Semantics(
-              button: true,
-              selected: i == _filter,
-              label: '${_filters[i]} filter',
-              child: ExcludeSemantics(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => setState(() => _filter = i),
-                  child: GlassChip(label: _filters[i], active: i == _filter),
+
+        // Filter chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: List.generate(_filters.length, (i) {
+              final selected = i == _filter;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilterChip(
+                  label: Text(_filters[i]),
+                  selected: selected,
+                  selectedColor: AppColors.primary,
+                  backgroundColor: Colors.white.withValues(alpha: 0.6),
+                  labelStyle: AppTheme.body(12.5,
+                      w: selected ? FontWeight.w700 : FontWeight.w500,
+                      c: selected ? Colors.white : AppColors.charcoal),
+                  side: BorderSide(
+                      color: selected ? AppColors.primary : Colors.white.withValues(alpha: 0.8)),
+                  onSelected: (_) => setState(() => _filter = i),
                 ),
-              ),
-            ),
+              );
+            }),
           ),
         ),
-        const SizedBox(height: 16),
-        if (visible.isEmpty)
-          GlassCard(
-            padding: const EdgeInsets.all(24),
-            child: Column(children: [
-              const Icon(Icons.filter_alt_off_rounded, color: AppColors.muted, size: 28),
-              const SizedBox(height: 10),
-              Text('No actions in this category yet',
-                  textAlign: TextAlign.center,
-                  style: AppTheme.body(14, w: FontWeight.w600, c: AppColors.muted)),
-            ]),
-          )
-        else
-          // Keyed on the filter so the entry stagger replays when the visible
-          // set changes, instead of reusing the previous rows' elements.
-          ...visible
-              .map((a) => Padding(
-                    key: ValueKey('${_filter}_${a.title}'),
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _card(a),
-                  ))
-              .toList()
-              .animate(interval: 70.ms)
-              .fadeIn(duration: 380.ms, curve: Curves.easeOut)
-              .slideX(begin: 0.12, end: 0, duration: 420.ms, curve: Curves.easeOutCubic),
+        const SizedBox(height: 20),
+
+        // Activity cards
+        ..._visibleActs
+            .map((a) => Padding(
+                  key: ValueKey('${_filter}_${a.title}'),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _card(a),
+                ))
+            .toList()
+            .animate(interval: 70.ms)
+            .fadeIn(duration: 380.ms, curve: Curves.easeOut)
+            .slideX(begin: 0.12, end: 0, duration: 420.ms, curve: Curves.easeOutCubic),
       ],
     );
   }

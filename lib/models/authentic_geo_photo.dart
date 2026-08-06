@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'action_category.dart';
+import '../services/ai_verification_service.dart';
 
-/// Represents an authentic geotagged photo capture with anti-spoof proof.
+/// Represents an authentic geotagged photo capture with AI proof.
 class AuthenticGeoPhoto {
   final String id;
   final ActionCategory category;
@@ -17,6 +18,13 @@ class AuthenticGeoPhoto {
   final String? imagePath;
   final String cryptoHash;
 
+  /// AI Verification Result (Real Photo vs AI Generated)
+  final AIVerificationResult aiVerification;
+
+  /// Secondary photo path & timestamp for dual-photo categories (Recycle BEFORE / AFTER)
+  final String? secondaryImagePath;
+  final DateTime? secondaryTimestamp;
+
   AuthenticGeoPhoto({
     required this.id,
     required this.category,
@@ -30,7 +38,11 @@ class AuthenticGeoPhoto {
     this.exifIntact = true,
     this.imagePath,
     String? cryptoHash,
-  }) : cryptoHash = cryptoHash ?? _generateCryptoHash(id, timestamp, latitude, longitude, isLiveCamera);
+    AIVerificationResult? aiVerification,
+    this.secondaryImagePath,
+    this.secondaryTimestamp,
+  })  : cryptoHash = cryptoHash ?? _generateCryptoHash(id, timestamp, latitude, longitude, isLiveCamera),
+        aiVerification = aiVerification ?? AIVerificationResult.analyzeImage(imagePath: imagePath ?? '', isLiveCamera: isLiveCamera);
 
   /// Generates a SHA-256 cryptographic verification token anchoring time, location & camera mode.
   static String _generateCryptoHash(
@@ -72,7 +84,7 @@ class AuthenticGeoPhoto {
   }
 
   /// Returns whether this photo passed all authenticity integrity checks.
-  bool get isVerifiedAuthentic => isLiveCamera && exifIntact && accuracyMeters <= 20.0;
+  bool get isVerifiedAuthentic => isLiveCamera && exifIntact && accuracyMeters <= 20.0 && aiVerification.isRealPhoto;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -87,5 +99,9 @@ class AuthenticGeoPhoto {
         'exifIntact': exifIntact,
         'imagePath': imagePath,
         'cryptoHash': cryptoHash,
+        'aiConfidenceScore': aiVerification.confidenceScore,
+        'isAiGenerated': aiVerification.isAiGenerated,
+        'secondaryImagePath': secondaryImagePath,
+        'secondaryTimestamp': secondaryTimestamp?.toIso8601String(),
       };
 }

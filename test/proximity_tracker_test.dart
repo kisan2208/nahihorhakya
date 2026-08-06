@@ -79,7 +79,7 @@ void main() {
       final categories = ActionCategory.allCategories;
       expect(categories.any((c) => c.id == 'tree_planted'), isTrue);
       expect(categories.any((c) => c.id == 'beach_clean'), isTrue);
-      expect(categories.any((c) => c.id == 'recycle'), isTrue);
+      expect(categories.any((c) => c.id == 'recycle_ewaste'), isTrue);
 
       final treeCategory = ActionCategory.findById('tree_planted');
       expect(treeCategory.requiresProximityCheck, isTrue);

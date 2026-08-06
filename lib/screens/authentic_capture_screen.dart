@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import '../models/action_category.dart';
 import '../models/authentic_geo_photo.dart';
-import '../services/proximity_tracker_service.dart';
+import '../services/ai_verification_service.dart';
+import '../services/eco_action_backend.dart';
 import '../theme.dart';
 import '../glass.dart';
 import '../widgets/geotag_watermark_painter.dart';
 
-/// Screen displaying the Geotagged Authentic Photo Capture with 30m Proximity Warning.
+/// Comprehensive Authentic Photo Capture Screen with AI check, dual-photo recycle proof, and 30m tree/beach proximity warning.
 class AuthenticCaptureScreen extends StatefulWidget {
   const AuthenticCaptureScreen({super.key});
 
@@ -15,7 +16,8 @@ class AuthenticCaptureScreen extends StatefulWidget {
 }
 
 class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
-  final ProximityTrackerService _proximityTracker = ProximityTrackerService();
+  final EcoActionBackend _backend = EcoActionBackend();
+  final AIVerificationService _aiService = AIVerificationService();
 
   late ActionCategory _selectedCategory;
   
@@ -24,8 +26,13 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   double _currentLng = 73.85673;
 
   late ProximityCheckResult _proximityResult;
-  AuthenticGeoPhoto? _capturedPhoto;
+  
+  // Single & Dual Photo states
+  AuthenticGeoPhoto? _firstPhoto; // Single photo or "BEFORE" photo
+  AuthenticGeoPhoto? _secondPhoto; // "AFTER" photo for dual-photo mode (Recycle)
+  
   bool _isLiveCapture = true;
+  bool _isAnalyzingAI = false;
 
   @override
   void initState() {
@@ -36,9 +43,10 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
   void _evaluateProximity() {
     if (_selectedCategory.requiresProximityCheck) {
-      _proximityResult = _proximityTracker.checkTreeProximity(
-        _currentLat,
-        _currentLng,
+      _proximityResult = _backend.check30mProximity(
+        currentLat: _currentLat,
+        currentLng: _currentLng,
+        categoryId: _selectedCategory.id,
         radiusMeters: _selectedCategory.proximityRadiusMeters,
       );
     } else {
@@ -49,11 +57,20 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   void _onCategoryChanged(ActionCategory cat) {
     setState(() {
       _selectedCategory = cat;
+      _firstPhoto = null;
+      _secondPhoto = null;
       _evaluateProximity();
     });
   }
 
-  void _capturePhoto() {
+  Future<void> _capturePhoto() async {
+    setState(() => _isAnalyzingAI = true);
+
+    final aiResult = await _aiService.verifyPhotoIntegrity(
+      imagePath: 'simulated_camera_stream.jpg',
+      isLiveCamera: _isLiveCapture,
+    );
+
     final photo = AuthenticGeoPhoto(
       id: 'GEO_${DateTime.now().millisecondsSinceEpoch}',
       category: _selectedCategory,
@@ -62,15 +79,70 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
       longitude: _currentLng,
       address: 'Ward 12, Pune, Maharashtra 411005',
       isLiveCamera: _isLiveCapture,
+      aiVerification: aiResult,
+      imagePath: 'captured_img_1.jpg',
     );
 
     setState(() {
-      _capturedPhoto = photo;
+      _isAnalyzingAI = false;
+      if (_selectedCategory.requiresDualPhoto && _firstPhoto == null) {
+        // Step 1 of Dual Photo (BEFORE)
+        _firstPhoto = photo;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📸 Step 1 Captured: Product BEFORE Recycling! Now capture Step 2 (AFTER).'),
+            backgroundColor: AppColors.primary,
+          ),
+        );
+      } else if (_selectedCategory.requiresDualPhoto && _firstPhoto != null) {
+        // Step 2 of Dual Photo (AFTER)
+        _secondPhoto = photo;
+      } else {
+        // Single Photo mode (Tree, Beach Clean, Compost, Segregate)
+        _firstPhoto = photo;
+      }
     });
+  }
+
+  Future<void> _submitToBackend() async {
+    if (_firstPhoto == null) return;
+
+    final finalPhoto = _selectedCategory.requiresDualPhoto && _secondPhoto != null
+        ? AuthenticGeoPhoto(
+            id: _firstPhoto!.id,
+            category: _firstPhoto!.category,
+            timestamp: _firstPhoto!.timestamp,
+            latitude: _firstPhoto!.latitude,
+            longitude: _firstPhoto!.longitude,
+            address: _firstPhoto!.address,
+            isLiveCamera: _firstPhoto!.isLiveCamera,
+            aiVerification: _firstPhoto!.aiVerification,
+            imagePath: _firstPhoto!.imagePath,
+            secondaryImagePath: _secondPhoto!.imagePath,
+            secondaryTimestamp: _secondPhoto!.timestamp,
+          )
+        : _firstPhoto!;
+
+    await _backend.saveAction(finalPhoto);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '✅ Authentic ${finalPhoto.category.title} submitted to backend! Crypto Hash: #${finalPhoto.cryptoHash}',
+          ),
+          backgroundColor: AppColors.primary,
+        ),
+      );
+      Navigator.pop(context);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDualMode = _selectedCategory.requiresDualPhoto;
+    final isComplete = isDualMode ? (_firstPhoto != null && _secondPhoto != null) : (_firstPhoto != null);
+
     return Scaffold(
       backgroundColor: AppColors.charcoal,
       appBar: AppBar(
@@ -88,22 +160,27 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
             ),
             const SizedBox(height: 2),
             Text(
-              'Time • Place • Anti-Spoof Proof',
+              'Time • Place • AI Authenticity Proof',
               style: AppTheme.body(11, c: Colors.white70),
             ),
           ],
         ),
         centerTitle: true,
       ),
-      body: _capturedPhoto != null ? _buildCapturedResultView() : _buildCameraCaptureView(),
+      body: isComplete ? _buildResultPreviewView() : _buildCameraCaptureView(),
     );
   }
 
-  /// Camera capture viewfinder with category selector and 30m proximity warning banner.
+  /// Camera capture viewfinder UI.
   Widget _buildCameraCaptureView() {
+    final isDualMode = _selectedCategory.requiresDualPhoto;
+    final currentStepLabel = isDualMode
+        ? (_firstPhoto == null ? 'Photo 1 of 2: Capture Product BEFORE Recycling' : 'Photo 2 of 2: Capture Product AFTER Recycling')
+        : 'Capture 1 Authentic Photo';
+
     return Stack(
       children: [
-        // Simulated Camera Viewfinder Grid
+        // Camera Viewfinder Background
         Positioned.fill(
           child: Container(
             decoration: BoxDecoration(
@@ -131,9 +208,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                     height: 340,
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: _proximityResult.hasNearbyTree
-                            ? AppColors.danger
-                            : AppColors.accent,
+                        color: _proximityResult.hasNearbyAction ? AppColors.danger : AppColors.accent,
                         width: 2,
                       ),
                       borderRadius: BorderRadius.circular(24),
@@ -145,12 +220,13 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
           ),
         ),
 
-        // Main Overlay Controls
+        // Controls Overlay
         SafeArea(
           child: Column(
             children: [
-              // 1. Category Selector Horizontal Bar
               const SizedBox(height: 8),
+
+              // 1. Category Selector Bar
               SizedBox(
                 height: 48,
                 child: ListView.separated(
@@ -164,11 +240,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                     return ChoiceChip(
                       selected: isSelected,
                       showCheckmark: false,
-                      avatar: Icon(
-                        cat.icon,
-                        size: 16,
-                        color: isSelected ? Colors.white : cat.color,
-                      ),
+                      avatar: Icon(cat.icon, size: 16, color: isSelected ? Colors.white : cat.color),
                       label: Text(
                         cat.title,
                         style: TextStyle(
@@ -179,35 +251,41 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       ),
                       selectedColor: cat.color,
                       backgroundColor: Colors.black45,
-                      side: BorderSide(
-                        color: isSelected ? cat.color : Colors.white24,
-                      ),
+                      side: BorderSide(color: isSelected ? cat.color : Colors.white24),
                       onSelected: (_) => _onCategoryChanged(cat),
                     );
                   },
                 ),
               ),
 
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
 
-              // 2. 30-Meter Proximity Warning Banner (Appears when tree planted near < 30m)
-              if (_selectedCategory.requiresProximityCheck && _proximityResult.hasNearbyTree)
+              // Step Indicator Pill for Dual Photo
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppColors.accent),
+                ),
+                child: Text(
+                  currentStepLabel,
+                  style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white),
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              // 2. 30-Meter Proximity Warning Banner (Tree Planting & Beach Clean ONLY)
+              if (_selectedCategory.requiresProximityCheck && _proximityResult.hasNearbyAction)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: _proximityResult.warningLevel == ProximityWarningLevel.critical
-                          ? AppColors.danger.withValues(alpha: 0.9)
-                          : const Color(0xFFE65100).withValues(alpha: 0.9),
+                      color: AppColors.danger.withValues(alpha: 0.95),
                       borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black38,
-                          blurRadius: 8,
-                          offset: Offset(0, 3),
-                        ),
-                      ],
+                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 3))],
                     ),
                     child: Row(
                       children: [
@@ -219,19 +297,15 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                             children: [
                               Text(
                                 '30m Proximity Duplicate Warning',
-                                style: AppTheme.body(12.5, w: FontWeight.bold, c: Colors.white),
+                                style: AppTheme.body(12, w: FontWeight.bold, c: Colors.white),
                               ),
                               const SizedBox(height: 2),
                               Text(
                                 _proximityResult.warningMessage,
-                                style: AppTheme.body(11, c: Colors.white.withValues(alpha: 0.9)),
+                                style: AppTheme.body(10.5, c: Colors.white.withValues(alpha: 0.9)),
                               ),
                             ],
                           ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.info_outline_rounded, color: Colors.white, size: 20),
-                          onPressed: () => _showProximityDetailDialog(),
                         ),
                       ],
                     ),
@@ -240,7 +314,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const Spacer(),
 
-              // 3. Location Simulation & Geotag Status Controller
+              // 3. Location Simulation & GPS Status Card
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: GlassCard(
@@ -271,37 +345,37 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      // Distance Slider Simulation Control
-                      Row(
-                        children: [
-                          Text('Simulate Proximity:', style: AppTheme.body(11, c: Colors.white70)),
-                          Expanded(
-                            child: Slider(
-                              value: _currentLat,
-                              min: 18.52040, // 5m near tree
-                              max: 18.52180, // ~160m away
-                              activeColor: AppColors.accent,
-                              onChanged: (val) {
-                                setState(() {
-                                  _currentLat = val;
-                                  _evaluateProximity();
-                                });
-                              },
+                      // Distance Slider for Testing 30m Rule on Tree / Beach Clean
+                      if (_selectedCategory.requiresProximityCheck)
+                        Row(
+                          children: [
+                            Text('Simulate Proximity:', style: AppTheme.body(11, c: Colors.white70)),
+                            Expanded(
+                              child: Slider(
+                                value: _currentLat,
+                                min: 18.52040, // 5m near anchor
+                                max: 18.52180, // ~160m away
+                                activeColor: AppColors.accent,
+                                onChanged: (val) {
+                                  setState(() {
+                                    _currentLat = val;
+                                    _evaluateProximity();
+                                  });
+                                },
+                              ),
                             ),
-                          ),
-                          Text(
-                            _proximityResult.hasNearbyTree
-                                ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m'
-                                : '>30m Clear',
-                            style: TextStyle(
-                              color: _proximityResult.hasNearbyTree ? Colors.amber : Colors.greenAccent,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
+                            Text(
+                              _proximityResult.hasNearbyAction
+                                  ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m'
+                                  : '>30m Clear',
+                              style: TextStyle(
+                                color: _proximityResult.hasNearbyAction ? Colors.amber : Colors.greenAccent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        ),
                     ],
                   ),
                 ),
@@ -309,43 +383,32 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
               const SizedBox(height: 16),
 
-              // 4. Shutter Controls Row
+              // 4. Shutter Control Row
               Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    // Mode Toggle (Live Camera vs Gallery test)
                     IconButton(
                       icon: Icon(
                         _isLiveCapture ? Icons.camera_alt_rounded : Icons.photo_library_rounded,
                         color: _isLiveCapture ? AppColors.accent : Colors.orangeAccent,
                       ),
                       onPressed: () {
-                        setState(() {
-                          _isLiveCapture = !_isLiveCapture;
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              _isLiveCapture ? 'Switched to Live Camera Capture' : 'Testing Gallery Upload Mode',
-                            ),
-                            duration: const Duration(seconds: 1),
-                          ),
-                        );
+                        setState(() => _isLiveCapture = !_isLiveCapture);
                       },
                     ),
 
-                    // Primary Shutter Button
+                    // Shutter Button
                     GestureDetector(
-                      onTap: _capturePhoto,
+                      onTap: _isAnalyzingAI ? null : _capturePhoto,
                       child: Container(
                         width: 76,
                         height: 76,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: _proximityResult.hasNearbyTree ? AppColors.danger : Colors.white,
+                            color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
                             width: 4,
                           ),
                           color: Colors.white.withValues(alpha: 0.2),
@@ -353,19 +416,24 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                         child: Container(
                           margin: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
-                            color: _proximityResult.hasNearbyTree ? AppColors.danger : Colors.white,
+                            color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
                             shape: BoxShape.circle,
                           ),
-                          child: Icon(
-                            _selectedCategory.icon,
-                            color: _proximityResult.hasNearbyTree ? Colors.white : _selectedCategory.color,
-                            size: 32,
-                          ),
+                          child: _isAnalyzingAI
+                              ? const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                                )
+                              : Icon(
+                                  _selectedCategory.icon,
+                                  color: _proximityResult.hasNearbyAction ? Colors.white : _selectedCategory.color,
+                                  size: 32,
+                                ),
                         ),
                       ),
                     ),
 
-                    const SizedBox(width: 48), // Balance shutter position
+                    const SizedBox(width: 48),
                   ],
                 ),
               ),
@@ -376,38 +444,49 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     );
   }
 
-  /// Displays the captured authentic geotagged photo preview.
-  Widget _buildCapturedResultView() {
-    final photo = _capturedPhoto!;
+  /// Displays captured result preview (Dual-Photo side-by-side for Recycle, Single-Photo for others).
+  Widget _buildResultPreviewView() {
+    final isDualMode = _selectedCategory.requiresDualPhoto;
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
-                child: GeotagWatermarkOverlay(
-                  photo: photo,
-                  child: Container(
-                    width: double.infinity,
-                    color: const Color(0xFF1E281F),
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(photo.category.icon, size: 90, color: photo.category.color),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Photo Captured with Geotag',
-                            style: AppTheme.display(18, c: Colors.white),
+              child: isDualMode
+                  ? Column(
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: GeotagWatermarkOverlay(
+                              photo: _firstPhoto!,
+                              customLabel: '1. BEFORE RECYCLE',
+                              child: _photoPlaceholder('Product Before Recycling'),
+                            ),
                           ),
-                        ],
+                        ),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: GeotagWatermarkOverlay(
+                              photo: _secondPhoto!,
+                              customLabel: '2. AFTER RECYCLE',
+                              child: _photoPlaceholder('Processed Product After Recycling'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: GeotagWatermarkOverlay(
+                        photo: _firstPhoto!,
+                        child: _photoPlaceholder('Authentic Geotagged Capture'),
                       ),
                     ),
-                  ),
-                ),
-              ),
             ),
             const SizedBox(height: 16),
             Row(
@@ -421,10 +500,11 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Retake Photo'),
+                    label: const Text('Retake'),
                     onPressed: () {
                       setState(() {
-                        _capturedPhoto = null;
+                        _firstPhoto = null;
+                        _secondPhoto = null;
                       });
                     },
                   ),
@@ -439,16 +519,8 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     icon: const Icon(Icons.check_circle_rounded),
-                    label: const Text('Submit Geotag'),
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Authentic ${photo.category.title} geotag submitted! Crypto Hash: #${photo.cryptoHash}'),
-                          backgroundColor: AppColors.primary,
-                        ),
-                      );
-                      Navigator.pop(context);
-                    },
+                    label: const Text('Save to Backend'),
+                    onPressed: _submitToBackend,
                   ),
                 ),
               ],
@@ -459,67 +531,19 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     );
   }
 
-  void _showProximityDetailDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E281F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Row(
+  Widget _photoPlaceholder(String label) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF1E281F),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.warning_amber_rounded, color: AppColors.danger),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Tree Proximity Warning',
-                style: AppTheme.display(16, c: Colors.white),
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Our anti-duplicate system detected existing trees within 30 meters of your current coordinates:',
-              style: AppTheme.body(12.5, c: Colors.white70),
-            ),
+            Icon(_selectedCategory.icon, size: 70, color: _selectedCategory.color),
             const SizedBox(height: 12),
-            ..._proximityResult.nearbyTrees.map(
-              (tree) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white10,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        tree.treeSpecies,
-                        style: AppTheme.body(12, w: FontWeight.bold, c: Colors.greenAccent),
-                      ),
-                      Text(
-                        'Distance: ${tree.distanceTo(_currentLat, _currentLng).toStringAsFixed(1)}m • Planter: ${tree.planterName}',
-                        style: AppTheme.body(11, c: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+            Text(label, style: AppTheme.display(16, c: Colors.white)),
           ],
         ),
-        actions: [
-          TextButton(
-            child: const Text('OK', style: TextStyle(color: AppColors.accent)),
-            onPressed: () => Navigator.pop(ctx),
-          ),
-        ],
       ),
     );
   }
