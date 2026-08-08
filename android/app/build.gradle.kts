@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.greencredit.greencredit"
     compileSdk = 35
-    compileSdkVersion = 35
+    compileSdkVersion("android-35")
     ndkVersion = "27.0.12077973"
 
     compileOptions {
