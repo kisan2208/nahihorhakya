@@ -30,7 +30,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   
   bool _usingSimulatedProximity = false;
   double _simulatedLat = 18.520420;
-  double _simulatedLng = 73.856730;
+  final double _simulatedLng = 73.856730;
 
   late ProximityCheckResult _proximityResult;
   
@@ -402,14 +402,14 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(color: Colors.greenAccent),
                               ),
-                              child: const Row(
+                              child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 11),
-                                  SizedBox(width: 3),
+                                  const Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 11),
+                                  const SizedBox(width: 3),
                                   Text(
-                                    'Google Location (Refresh)',
-                                    style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                    _hasLocationPermission ? 'Google Location (Refresh)' : 'Enable GPS Permission',
+                                    style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
                                   ),
                                 ],
                               ),
