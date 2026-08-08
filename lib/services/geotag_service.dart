@@ -46,26 +46,31 @@ class GeotagData {
     return '${latitude.abs().toStringAsFixed(6)}° $latDir, ${longitude.abs().toStringAsFixed(6)}° $lngDir';
   }
 
-  /// Line 1 of street address (Street & Locality)
+  /// Line 1 of street address (House No + Street + Locality/Sublocality)
   String get addressLine1 {
-    final parts = [
+    final parts = <String>[
       if (streetAddress.isNotEmpty) streetAddress,
-      if (locality.isNotEmpty && locality != streetAddress) locality,
+      if (locality.isNotEmpty && locality != streetAddress && locality != city) locality,
     ];
-    return parts.isNotEmpty ? parts.join(', ') : 'Veera Desai Rd, Andheri West';
+    // Return empty if no real data — never return hardcoded fake addresses
+    return parts.isNotEmpty ? parts.join(', ') : city;
   }
 
-  /// Line 2 of street address (City, State, Zip, Country)
+  /// Line 2 of street address (City, State Pincode, Country)
   String get addressLine2 {
-    return '$city, $state $postalCode, $country'.trim();
+    final parts = <String>[
+      if (city.isNotEmpty) city,
+      if (state.isNotEmpty) state,
+      if (postalCode.isNotEmpty) postalCode,
+      if (country.isNotEmpty) country,
+    ];
+    return parts.join(', ').trim();
   }
 
   /// Full Google Maps formatted street address for geotag watermark stamp.
   String get fullFormattedAddress {
-    if (formattedGoogleAddress.isNotEmpty) {
-      return formattedGoogleAddress;
-    }
-    final parts = [
+    if (formattedGoogleAddress.isNotEmpty) return formattedGoogleAddress;
+    final parts = <String>[
       if (streetAddress.isNotEmpty) streetAddress,
       if (locality.isNotEmpty) locality,
       if (city.isNotEmpty) city,
@@ -73,7 +78,7 @@ class GeotagData {
       if (postalCode.isNotEmpty) postalCode,
       if (country.isNotEmpty) country,
     ];
-    return parts.isNotEmpty ? parts.join(', ') : '$city, $state, $country';
+    return parts.isNotEmpty ? parts.join(', ') : formattedCoordinates;
   }
 
   /// Formatted date and time with local timezone offset.
@@ -81,7 +86,9 @@ class GeotagData {
     final day = timestamp.day.toString().padLeft(2, '0');
     final month = _monthName(timestamp.month);
     final year = timestamp.year;
-    final hour = timestamp.hour > 12 ? timestamp.hour - 12 : (timestamp.hour == 0 ? 12 : timestamp.hour);
+    final hour = timestamp.hour > 12
+        ? timestamp.hour - 12
+        : (timestamp.hour == 0 ? 12 : timestamp.hour);
     final minute = timestamp.minute.toString().padLeft(2, '0');
     final second = timestamp.second.toString().padLeft(2, '0');
     final amPm = timestamp.hour >= 12 ? 'PM' : 'AM';
@@ -89,33 +96,44 @@ class GeotagData {
   }
 
   static String _monthName(int m) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
     return months[(m - 1) % 12];
   }
 
-  static GeotagData defaultFallback({double lat = 19.131006, double lng = 72.833701}) {
+  static GeotagData defaultFallback({double lat = 0.0, double lng = 0.0}) {
     final now = DateTime.now();
+    final tzOffset = _formatTzOffsetStatic(now.timeZoneOffset);
     return GeotagData(
       latitude: lat,
       longitude: lng,
-      altitude: 12.0,
-      accuracyMeters: 2.4,
-      formattedGoogleAddress: '177, Veera Desai Rd, Jeevan Nagar, Andheri West, Mumbai, Maharashtra 400053, India',
-      streetAddress: '177, Veera Desai Rd',
-      locality: 'Jeevan Nagar, Andheri West',
-      city: 'Mumbai',
-      state: 'Maharashtra',
-      country: 'India',
-      postalCode: '400053',
+      altitude: 0.0,
+      accuracyMeters: 0.0,
+      formattedGoogleAddress: '',
+      streetAddress: '',
+      locality: '',
+      city: '',
+      state: '',
+      country: '',
+      postalCode: '',
       timestamp: now,
-      timeZoneName: 'IST',
-      timeZoneOffset: 'UTC+05:30',
+      timeZoneName: now.timeZoneName,
+      timeZoneOffset: tzOffset,
       isRealHardwareGPS: false,
     );
   }
+
+  static String _formatTzOffsetStatic(Duration offset) {
+    final hours = offset.inHours.abs().toString().padLeft(2, '0');
+    final minutes = (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+    final sign = offset.isNegative ? '-' : '+';
+    return 'UTC$sign$hours:$minutes';
+  }
 }
 
-/// Service managing location permissions, hardware GPS, and Google Maps reverse geocoding.
+/// Service managing location permissions, hardware GPS, and reverse geocoding.
 class GeotagService {
   /// Explicitly requests location permission from Android OS.
   Future<bool> requestLocationPermission() async {
@@ -143,7 +161,8 @@ class GeotagService {
     }
   }
 
-  /// Captures real-time accurate location and reverse-geocodes Google Maps address.
+  /// Captures real-time accurate location and reverse-geocodes address.
+  /// Pass [googleApiKey] for Google Maps Geocoding (most accurate).
   Future<GeotagData> captureRealGeotag({
     double? forcedLat,
     double? forcedLng,
@@ -153,13 +172,13 @@ class GeotagService {
     final tzOffset = _formatTzOffset(now.timeZoneOffset);
     final tzName = now.timeZoneName;
 
-    double lat = forcedLat ?? 19.131006;
-    double lng = forcedLng ?? 72.833701;
-    double altitude = 15.0;
-    double accuracy = 2.4;
+    double lat = forcedLat ?? 0.0;
+    double lng = forcedLng ?? 0.0;
+    double altitude = 0.0;
+    double accuracy = 0.0;
     bool isRealHardware = false;
 
-    // Hardware GPS Lookup
+    // ── Step 1: Get real GPS coordinates ──────────────────────────────────────
     if (forcedLat == null && forcedLng == null && !kIsWeb) {
       final hasPerm = await requestLocationPermission();
       if (hasPerm) {
@@ -169,7 +188,7 @@ class GeotagService {
               accuracy: LocationAccuracy.best,
               distanceFilter: 0,
             ),
-          );
+          ).timeout(const Duration(seconds: 15));
           lat = pos.latitude;
           lng = pos.longitude;
           altitude = pos.altitude;
@@ -179,6 +198,28 @@ class GeotagService {
       }
     }
 
+    // If we still have no coordinates, return a minimal fallback
+    if (lat == 0.0 && lng == 0.0) {
+      return GeotagData(
+        latitude: lat,
+        longitude: lng,
+        altitude: altitude,
+        accuracyMeters: accuracy,
+        formattedGoogleAddress: 'Location unavailable — enable GPS',
+        streetAddress: '',
+        locality: '',
+        city: 'Unknown',
+        state: '',
+        country: '',
+        postalCode: '',
+        timestamp: now,
+        timeZoneName: tzName,
+        timeZoneOffset: tzOffset,
+        isRealHardwareGPS: false,
+      );
+    }
+
+    // ── Step 2: Reverse Geocode the real GPS coordinates ──────────────────────
     String googleFormatted = '';
     String street = '';
     String locality = '';
@@ -187,74 +228,140 @@ class GeotagService {
     String country = '';
     String postalCode = '';
 
-    // 1. Google Maps Geocoding API Lookup (if API key provided)
+    // 2a. Google Maps Geocoding API (most accurate, requires API key)
     if (googleApiKey != null && googleApiKey.isNotEmpty && !kIsWeb) {
       try {
         final client = HttpClient();
-        final uri = Uri.parse('https://maps.googleapis.com/maps/api/geocode/json?latlng=$lat,$lng&key=$googleApiKey');
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 3));
+        final uri = Uri.parse(
+          'https://maps.googleapis.com/maps/api/geocode/json'
+          '?latlng=$lat,$lng&key=$googleApiKey&language=en',
+        );
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 5));
         final res = await req.close();
         if (res.statusCode == 200) {
           final body = await res.transform(utf8.decoder).join();
-          final data = json.decode(body);
-          if (data['status'] == 'OK' && (data['results'] as List).isNotEmpty) {
-            googleFormatted = data['results'][0]['formatted_address'] ?? '';
+          final data = json.decode(body) as Map<String, dynamic>;
+          if (data['status'] == 'OK') {
+            final results = data['results'] as List;
+            if (results.isNotEmpty) {
+              googleFormatted = results[0]['formatted_address'] ?? '';
+              // Parse individual address components
+              final components = results[0]['address_components'] as List? ?? [];
+              for (final comp in components) {
+                final types = (comp['types'] as List).cast<String>();
+                final value = comp['long_name'] as String? ?? '';
+                if (types.contains('street_number')) {
+                  street = value.isNotEmpty ? '$value ${street.isEmpty ? "" : street}' : street;
+                } else if (types.contains('route')) {
+                  street = street.isEmpty ? value : '$street $value';
+                } else if (types.contains('sublocality_level_1') ||
+                    types.contains('sublocality')) {
+                  locality = value;
+                } else if (types.contains('locality')) {
+                  city = value;
+                } else if (types.contains('administrative_area_level_1')) {
+                  state = value;
+                } else if (types.contains('country')) {
+                  country = value;
+                } else if (types.contains('postal_code')) {
+                  postalCode = value;
+                }
+              }
+            }
           }
         }
+        client.close();
       } catch (_) {}
     }
 
-    // 2. Fast Free Reverse Geocode API (BigDataCloud Client API - No Key Needed)
+    // 2b. OpenStreetMap Nominatim (free, no key needed — primary fallback)
     if (googleFormatted.isEmpty && !kIsWeb) {
       try {
         final client = HttpClient();
-        final uri = Uri.parse('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=$lat&longitude=$lng&localityLanguage=en');
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 3));
+        final uri = Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse'
+          '?lat=$lat&lon=$lng&format=json&addressdetails=1&zoom=18',
+        );
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 6));
+        req.headers.set('User-Agent', 'GreenCreditApp/1.0 (contact@greencredit.app)');
+        req.headers.set('Accept-Language', 'en');
         final res = await req.close();
         if (res.statusCode == 200) {
           final body = await res.transform(utf8.decoder).join();
-          final data = json.decode(body);
-          city = data['city'] ?? data['locality'] ?? '';
-          locality = data['locality'] ?? data['subLocality'] ?? '';
-          state = data['principalSubdivision'] ?? '';
-          country = data['countryName'] ?? 'India';
-          postalCode = data['postcode'] ?? '';
-          if (city.isNotEmpty) {
-            googleFormatted = [
-              if (locality.isNotEmpty && locality != city) locality,
-              city,
+          final data = json.decode(body) as Map<String, dynamic>;
+          final address = data['address'] as Map<String, dynamic>?;
+          if (address != null) {
+            // Build street: house_number + road/street
+            final houseNum = address['house_number'] as String? ?? '';
+            final road = address['road'] as String?
+                ?? address['pedestrian'] as String?
+                ?? address['footway'] as String?
+                ?? address['path'] as String?
+                ?? '';
+            street = [
+              if (houseNum.isNotEmpty) houseNum,
+              if (road.isNotEmpty) road,
+            ].join(', ');
+
+            // Build locality: neighbourhood > suburb > city_district > town
+            locality = address['neighbourhood'] as String?
+                ?? address['suburb'] as String?
+                ?? address['city_district'] as String?
+                ?? address['quarter'] as String?
+                ?? '';
+
+            city = address['city'] as String?
+                ?? address['town'] as String?
+                ?? address['municipality'] as String?
+                ?? address['county'] as String?
+                ?? '';
+
+            state = address['state'] as String? ?? '';
+            country = address['country'] as String? ?? '';
+            postalCode = address['postcode'] as String? ?? '';
+
+            // Build the formatted address from parts
+            final addrParts = <String>[
+              if (street.isNotEmpty) street,
+              if (locality.isNotEmpty) locality,
+              if (city.isNotEmpty) city,
               if (state.isNotEmpty) state,
               if (postalCode.isNotEmpty) postalCode,
               if (country.isNotEmpty) country,
-            ].join(', ');
+            ];
+            googleFormatted = addrParts.join(', ');
           }
         }
+        client.close();
       } catch (_) {}
     }
 
-    // 3. Fallback OpenStreetMap Nominatim API
+    // 2c. BigDataCloud (last resort — gives at least city/state)
     if (googleFormatted.isEmpty && !kIsWeb) {
       try {
         final client = HttpClient();
-        final uri = Uri.parse('https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json');
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 3));
-        req.headers.set('User-Agent', 'GreenCreditApp/1.0');
+        final uri = Uri.parse(
+          'https://api.bigdatacloud.net/data/reverse-geocode-client'
+          '?latitude=$lat&longitude=$lng&localityLanguage=en',
+        );
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 5));
         final res = await req.close();
         if (res.statusCode == 200) {
           final body = await res.transform(utf8.decoder).join();
-          final data = json.decode(body);
-          final address = data['address'];
-          if (address != null) {
-            street = address['road'] ?? address['suburb'] ?? '';
-            locality = address['neighbourhood'] ?? address['suburb'] ?? '';
-            city = address['city'] ?? address['town'] ?? address['county'] ?? '';
-            state = address['state'] ?? '';
-            country = address['country'] ?? 'India';
-            postalCode = address['postcode'] ?? '';
+          final data = json.decode(body) as Map<String, dynamic>;
+          if (city.isEmpty) city = data['city'] as String? ?? '';
+          if (locality.isEmpty) {
+            locality = data['locality'] as String?
+                ?? data['subLocality'] as String?
+                ?? '';
+          }
+          if (state.isEmpty) state = data['principalSubdivision'] as String? ?? '';
+          if (country.isEmpty) country = data['countryName'] as String? ?? '';
+          if (postalCode.isEmpty) postalCode = data['postcode'] as String? ?? '';
 
-            googleFormatted = [
-              if (street.isNotEmpty) street,
-              if (locality.isNotEmpty) locality,
+          if (city.isNotEmpty) {
+            googleFormatted = <String>[
+              if (locality.isNotEmpty && locality != city) locality,
               if (city.isNotEmpty) city,
               if (state.isNotEmpty) state,
               if (postalCode.isNotEmpty) postalCode,
@@ -262,18 +369,33 @@ class GeotagService {
             ].join(', ');
           }
         }
+        client.close();
       } catch (_) {}
     }
 
-    // 4. Dynamic Spatial Coordinate Resolver (Ensures exact city match for any Lat/Lng without hardcoded defaults!)
-    final regionalLocation = _resolveLocationFromCoordinates(lat, lng);
-    if (city.isEmpty) city = regionalLocation.city;
-    if (state.isEmpty) state = regionalLocation.state;
-    if (country.isEmpty) country = regionalLocation.country;
-    if (locality.isEmpty) locality = regionalLocation.locality;
-    if (postalCode.isEmpty) postalCode = regionalLocation.postalCode;
+    // ── Step 3: Final coordinate-based fallback (city only, no fake streets) ──
+    if (city.isEmpty) {
+      final regional = _resolveLocationFromCoordinates(lat, lng);
+      city = regional.city;
+      if (state.isEmpty) state = regional.state;
+      if (country.isEmpty) country = regional.country;
+      // Do NOT fill in locality/street from regional fallback — keep them empty
+      // so we don't show fake street names
+    }
+
     if (googleFormatted.isEmpty) {
-      googleFormatted = '${locality.isNotEmpty ? "$locality, " : ""}$city, $state $postalCode, $country';
+      googleFormatted = <String>[
+        if (street.isNotEmpty) street,
+        if (locality.isNotEmpty) locality,
+        if (city.isNotEmpty) city,
+        if (state.isNotEmpty) state,
+        if (postalCode.isNotEmpty) postalCode,
+        if (country.isNotEmpty) country,
+      ].join(', ');
+    }
+
+    if (googleFormatted.isEmpty) {
+      googleFormatted = formattedCoordinatesString(lat, lng);
     }
 
     return GeotagData(
@@ -282,7 +404,7 @@ class GeotagService {
       altitude: altitude,
       accuracyMeters: accuracy,
       formattedGoogleAddress: googleFormatted,
-      streetAddress: street.isNotEmpty ? street : locality,
+      streetAddress: street,
       locality: locality,
       city: city,
       state: state,
@@ -295,58 +417,52 @@ class GeotagService {
     );
   }
 
-  /// Calculates dynamic real city & area based on exact Lat/Lng bounds if network is offline.
-  static _RegionalInfo _resolveLocationFromCoordinates(double lat, double lng) {
-    // Mumbai Region (Lat ~18.8 to 19.3, Lng ~72.7 to 73.1)
-    if (lat >= 18.80 && lat <= 19.35 && lng >= 72.75 && lng <= 73.15) {
-      return _RegionalInfo(
-        city: 'Mumbai',
-        state: 'Maharashtra',
-        country: 'India',
-        locality: 'Andheri West',
-        postalCode: '400053',
-      );
-    }
-    // Pune Region (Lat ~18.35 to 18.75, Lng ~73.7 to 74.0)
-    if (lat >= 18.35 && lat <= 18.75 && lng >= 73.70 && lng <= 74.00) {
-      return _RegionalInfo(
-        city: 'Pune',
-        state: 'Maharashtra',
-        country: 'India',
-        locality: 'Shivajinagar',
-        postalCode: '411005',
-      );
-    }
-    // Delhi NCR Region (Lat ~28.3 to 28.9, Lng ~76.8 to 77.5)
-    if (lat >= 28.30 && lat <= 28.90 && lng >= 76.80 && lng <= 77.50) {
-      return _RegionalInfo(
-        city: 'New Delhi',
-        state: 'Delhi',
-        country: 'India',
-        locality: 'Connaught Place',
-        postalCode: '110001',
-      );
-    }
-    // Bengaluru Region (Lat ~12.8 to 13.2, Lng ~77.4 to 77.8)
-    if (lat >= 12.80 && lat <= 13.20 && lng >= 77.40 && lng <= 77.80) {
-      return _RegionalInfo(
-        city: 'Bengaluru',
-        state: 'Karnataka',
-        country: 'India',
-        locality: 'Indiranagar',
-        postalCode: '560038',
-      );
-    }
-    // Universal Dynamic Fallback from coordinates
+  static String formattedCoordinatesString(double lat, double lng) {
     final latDir = lat >= 0 ? 'N' : 'S';
     final lngDir = lng >= 0 ? 'E' : 'W';
-    return _RegionalInfo(
-      city: '${lat.abs().toStringAsFixed(2)}° $latDir',
-      state: '${lng.abs().toStringAsFixed(2)}° $lngDir',
-      country: 'India',
-      locality: 'Location Marker',
-      postalCode: '',
-    );
+    return '${lat.abs().toStringAsFixed(6)}° $latDir, ${lng.abs().toStringAsFixed(6)}° $lngDir';
+  }
+
+  /// Calculates dynamic real city based on exact Lat/Lng bounds when offline.
+  /// Returns empty locality/postalCode to prevent showing fake street names.
+  static _RegionalInfo _resolveLocationFromCoordinates(double lat, double lng) {
+    // Mumbai Region
+    if (lat >= 18.80 && lat <= 19.35 && lng >= 72.75 && lng <= 73.15) {
+      return _RegionalInfo(city: 'Mumbai', state: 'Maharashtra', country: 'India');
+    }
+    // Pune Region
+    if (lat >= 18.35 && lat <= 18.75 && lng >= 73.70 && lng <= 74.00) {
+      return _RegionalInfo(city: 'Pune', state: 'Maharashtra', country: 'India');
+    }
+    // Delhi NCR Region
+    if (lat >= 28.30 && lat <= 28.90 && lng >= 76.80 && lng <= 77.50) {
+      return _RegionalInfo(city: 'New Delhi', state: 'Delhi', country: 'India');
+    }
+    // Bengaluru Region
+    if (lat >= 12.80 && lat <= 13.20 && lng >= 77.40 && lng <= 77.80) {
+      return _RegionalInfo(city: 'Bengaluru', state: 'Karnataka', country: 'India');
+    }
+    // Hyderabad Region
+    if (lat >= 17.20 && lat <= 17.65 && lng >= 78.20 && lng <= 78.75) {
+      return _RegionalInfo(city: 'Hyderabad', state: 'Telangana', country: 'India');
+    }
+    // Chennai Region
+    if (lat >= 12.80 && lat <= 13.25 && lng >= 80.10 && lng <= 80.35) {
+      return _RegionalInfo(city: 'Chennai', state: 'Tamil Nadu', country: 'India');
+    }
+    // Kolkata Region
+    if (lat >= 22.40 && lat <= 22.75 && lng >= 88.20 && lng <= 88.55) {
+      return _RegionalInfo(city: 'Kolkata', state: 'West Bengal', country: 'India');
+    }
+    // Ahmedabad Region
+    if (lat >= 22.90 && lat <= 23.15 && lng >= 72.45 && lng <= 72.75) {
+      return _RegionalInfo(city: 'Ahmedabad', state: 'Gujarat', country: 'India');
+    }
+    // Generic India fallback
+    if (lat >= 6.0 && lat <= 37.0 && lng >= 68.0 && lng <= 98.0) {
+      return _RegionalInfo(city: '', state: '', country: 'India');
+    }
+    return _RegionalInfo(city: '', state: '', country: '');
   }
 
   static String _formatTzOffset(Duration offset) {
@@ -361,14 +477,10 @@ class _RegionalInfo {
   final String city;
   final String state;
   final String country;
-  final String locality;
-  final String postalCode;
 
   _RegionalInfo({
     required this.city,
     required this.state,
     required this.country,
-    required this.locality,
-    required this.postalCode,
   });
 }

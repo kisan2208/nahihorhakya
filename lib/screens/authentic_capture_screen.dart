@@ -36,9 +36,11 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   
   AuthenticGeoPhoto? _firstPhoto;
   AuthenticGeoPhoto? _secondPhoto;
-  
+
+  // Geotag is fetched ONCE and cached — not re-fetched on every photo  
   bool _isLiveCapture = true;
   bool _isProcessing = false;
+  bool _isLoadingLocation = true;   // shows spinner while GPS+address fetches
   bool _hasLocationPermission = true;
 
   @override
@@ -47,22 +49,31 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     _selectedCategory = ActionCategory.defaultCategory;
     _currentGeotag = GeotagData.defaultFallback();
     _evaluateProximity();
-    _fetchRealGeotag();
+    _initBackendAndLocation();
+  }
+
+  Future<void> _initBackendAndLocation() async {
+    // Initialize backend (loads persisted eco-actions from device storage)
+    await _backend.initialize();
+    // Then fetch real GPS location + address
+    await _fetchRealGeotag();
   }
 
   Future<void> _fetchRealGeotag() async {
-    // Explicitly prompt user for Android location permission
+    if (mounted) setState(() => _isLoadingLocation = true);
+
+    // Request permission and fetch GPS + reverse-geocoded address once
     final permGranted = await _geotagService.requestLocationPermission();
-    
     final geo = await _geotagService.captureRealGeotag(
       forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
       forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
     );
-    
+
     if (mounted) {
       setState(() {
         _hasLocationPermission = permGranted;
         _currentGeotag = geo;
+        _isLoadingLocation = false;
         _evaluateProximity();
       });
     }
@@ -93,7 +104,7 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     });
   }
 
-  /// Takes real camera photo & captures real-time accurate Google Maps location & date/time.
+  /// Takes real camera photo. Uses the CACHED geotag (no re-fetch = no lag).
   Future<void> _takePhotoWithCamera() async {
     try {
       final ImageSource source = _isLiveCapture ? ImageSource.camera : ImageSource.gallery;
@@ -108,13 +119,11 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
       setState(() => _isProcessing = true);
 
-      // Request fresh hardware location & Google Maps reverse-geocoded address
-      final realGeotag = await _geotagService.captureRealGeotag(
-        forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
-        forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
-      );
+      // Use the CACHED geotag — no re-fetch here, which was causing lag
+      // User can tap "Refresh Location" button to update geotag manually
+      final realGeotag = _currentGeotag;
 
-      // AI Image Verification
+      // AI Image Verification only (fast — no GPS/network)
       final aiResult = await _aiService.verifyPhotoIntegrity(
         imagePath: pickedFile.path,
         isLiveCamera: _isLiveCapture,
@@ -131,7 +140,6 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
 
       setState(() {
         _isProcessing = false;
-        _currentGeotag = realGeotag;
         if (_selectedCategory.requiresDualPhoto && _firstPhoto == null) {
           _firstPhoto = photo;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -376,24 +384,37 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.map_rounded, color: Colors.greenAccent, size: 16),
+                          _isLoadingLocation
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.greenAccent,
+                                  ),
+                                )
+                              : const Icon(Icons.map_rounded, color: Colors.greenAccent, size: 16),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              _currentGeotag.formattedCoordinates,
+                              _isLoadingLocation
+                                  ? 'Fetching GPS location...'
+                                  : _currentGeotag.formattedCoordinates,
                               style: AppTheme.body(11, w: FontWeight.bold, c: Colors.white),
                             ),
                           ),
                           InkWell(
-                            onTap: () async {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('📍 Requesting Location Permission & Google Maps Address...'),
-                                  duration: Duration(seconds: 1),
-                                ),
-                              );
-                              await _fetchRealGeotag();
-                            },
+                            onTap: _isLoadingLocation
+                                ? null
+                                : () async {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('📍 Refreshing GPS & address...'),
+                                        duration: Duration(seconds: 1),
+                                      ),
+                                    );
+                                    await _fetchRealGeotag();
+                                  },
                             borderRadius: BorderRadius.circular(10),
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -408,7 +429,9 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                                   const Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 11),
                                   const SizedBox(width: 3),
                                   Text(
-                                    _hasLocationPermission ? 'Google Location (Refresh)' : 'Enable GPS Permission',
+                                    _isLoadingLocation
+                                        ? 'Loading...'
+                                        : (_hasLocationPermission ? 'Refresh Location' : 'Enable GPS'),
                                     style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
                                   ),
                                 ],

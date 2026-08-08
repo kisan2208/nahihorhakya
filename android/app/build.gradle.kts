@@ -1,13 +1,13 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.greencredit.greencredit"
     compileSdk = 35
-    compileSdkVersion("android-35")
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -31,6 +31,12 @@ android {
         release {
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+}
+
+configurations.all {
+    resolutionStrategy {
+        force("androidx.activity:activity:1.9.3")
     }
 }
 

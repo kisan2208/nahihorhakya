@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/authentic_geo_photo.dart';
 
 /// Database model for previously saved action entries in backend.
@@ -30,12 +32,37 @@ class SavedEcoAction {
   /// Calculates distance in meters from given target coordinates to this saved action.
   double distanceTo(double targetLat, double targetLng) {
     return EcoActionBackend.calculateDistanceMeters(
-      latitude,
-      longitude,
-      targetLat,
-      targetLng,
+      latitude, longitude, targetLat, targetLng,
     );
   }
+
+  /// Serialize to JSON map for SharedPreferences persistence.
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'categoryId': categoryId,
+    'latitude': latitude,
+    'longitude': longitude,
+    'timestamp': timestamp.toIso8601String(),
+    'address': address,
+    'cryptoHash': cryptoHash,
+    'aiScore': aiScore,
+    'beforeImagePath': beforeImagePath,
+    'afterImagePath': afterImagePath,
+  };
+
+  /// Deserialize from JSON map loaded from SharedPreferences.
+  factory SavedEcoAction.fromJson(Map<String, dynamic> json) => SavedEcoAction(
+    id: json['id'] as String,
+    categoryId: json['categoryId'] as String,
+    latitude: (json['latitude'] as num).toDouble(),
+    longitude: (json['longitude'] as num).toDouble(),
+    timestamp: DateTime.parse(json['timestamp'] as String),
+    address: json['address'] as String,
+    cryptoHash: json['cryptoHash'] as String,
+    aiScore: (json['aiScore'] as num).toDouble(),
+    beforeImagePath: json['beforeImagePath'] as String?,
+    afterImagePath: json['afterImagePath'] as String?,
+  );
 }
 
 /// Result of checking 30m proximity against backend database.
@@ -61,43 +88,64 @@ class ProximityCheckResult {
 }
 
 /// Persistent local backend repository managing saved actions & proximity checks.
+/// Data is persisted to device storage using SharedPreferences — survives app restarts.
 class EcoActionBackend {
   final List<SavedEcoAction> _database = [];
+  static const String _prefsKey = 'eco_actions_v1';
+  bool _initialized = false;
 
-  EcoActionBackend({List<SavedEcoAction>? seedData}) {
-    if (seedData != null && seedData.isNotEmpty) {
-      _database.addAll(seedData);
-    } else {
-      _seedDefaultBackendData();
-    }
-  }
+  EcoActionBackend();
 
   static const double earthRadiusMeters = 6371000.0;
   static const double default30mThreshold = 30.0;
 
+  /// Must be called once at app startup before using the backend.
+  Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+      if (raw != null && raw.isNotEmpty) {
+        final List<dynamic> jsonList = json.decode(raw) as List;
+        _database.clear();
+        for (final item in jsonList) {
+          try {
+            _database.add(SavedEcoAction.fromJson(item as Map<String, dynamic>));
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Persists the current database to device storage.
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = json.encode(_database.map((e) => e.toJson()).toList());
+      await prefs.setString(_prefsKey, jsonStr);
+    } catch (_) {}
+  }
+
   /// Haversine distance formula.
   static double calculateDistanceMeters(
-    double lat1,
-    double lng1,
-    double lat2,
-    double lng2,
+    double lat1, double lng1,
+    double lat2, double lng2,
   ) {
     final dLat = (lat2 - lat1) * (pi / 180.0);
     final dLng = (lng2 - lng1) * (pi / 180.0);
-
     final radLat1 = lat1 * (pi / 180.0);
     final radLat2 = lat2 * (pi / 180.0);
-
     final a = sin(dLat / 2) * sin(dLat / 2) +
         sin(dLng / 2) * sin(dLng / 2) * cos(radLat1) * cos(radLat2);
-    
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
     return earthRadiusMeters * c;
   }
 
-  /// Saves a new authentic geotagged photo action to the backend.
+  /// Saves a new authentic geotagged photo action to the backend and persists to device.
   Future<bool> saveAction(AuthenticGeoPhoto photo) async {
+    if (!_initialized) await initialize();
+
     final entry = SavedEcoAction(
       id: photo.id,
       categoryId: photo.category.id,
@@ -112,11 +160,11 @@ class EcoActionBackend {
     );
 
     _database.add(entry);
+    await _persist(); // Save to device storage immediately
     return true;
   }
 
   /// Checks if there is any previous entry for [categoryId] within [radiusMeters] (30m).
-  /// Strictly evaluated for Tree Planting (`tree_planted`) & Beach Clean (`beach_clean`).
   ProximityCheckResult check30mProximity({
     required double currentLat,
     required double currentLng,
@@ -143,17 +191,20 @@ class EcoActionBackend {
       }
     }
 
-    if (nearby.isEmpty) {
-      return ProximityCheckResult.clear;
-    }
+    if (nearby.isEmpty) return ProximityCheckResult.clear;
 
-    nearby.sort((a, b) => a.distanceTo(currentLat, currentLng).compareTo(b.distanceTo(currentLat, currentLng)));
+    nearby.sort((a, b) =>
+        a.distanceTo(currentLat, currentLng)
+            .compareTo(b.distanceTo(currentLat, currentLng)));
 
     final nearest = nearby.first;
-    final categoryName = categoryId == 'tree_planted' ? 'Tree Planting' : 'Cleanliness Drive';
+    final categoryName =
+        categoryId == 'tree_planted' ? 'Tree Planting' : 'Cleanliness Drive';
     final formattedDist = minDistance.toStringAsFixed(1);
 
-    final warning = '⚠️ 30m PROXIMITY DUPLICATE: A previous $categoryName action was already recorded ${formattedDist}m near this location on ${_formatDate(nearest.timestamp)}.';
+    final warning =
+        '⚠️ 30m PROXIMITY DUPLICATE: A previous $categoryName action was already '
+        'recorded ${formattedDist}m near this location on ${_formatDate(nearest.timestamp)}.';
 
     return ProximityCheckResult(
       hasNearbyAction: true,
@@ -166,32 +217,10 @@ class EcoActionBackend {
   /// Retrieves all saved eco-actions stored in backend.
   List<SavedEcoAction> getAllSavedActions() => List.unmodifiable(_database);
 
-  /// Seeds default realistic sample records for testing 30m proximity.
-  void _seedDefaultBackendData() {
-    _database.addAll([
-      // Tree Planting Anchor (Ward 12, Pune)
-      SavedEcoAction(
-        id: 'TREE_PREV_1',
-        categoryId: 'tree_planted',
-        latitude: 18.52042, // 5m near center
-        longitude: 73.85673,
-        timestamp: DateTime.now().subtract(const Duration(days: 12)),
-        address: 'Ward 12 Park, Pune',
-        cryptoHash: 'AUTH_8829A',
-        aiScore: 0.985,
-      ),
-      // Beach Clean / Cleanliness Drive Anchor
-      SavedEcoAction(
-        id: 'BEACH_PREV_1',
-        categoryId: 'beach_clean',
-        latitude: 18.52045, // 10m near center
-        longitude: 73.85675,
-        timestamp: DateTime.now().subtract(const Duration(days: 5)),
-        address: 'Riverside Walkway, Ward 12',
-        cryptoHash: 'AUTH_9912B',
-        aiScore: 0.972,
-      ),
-    ]);
+  /// Clears all actions (for testing only).
+  Future<void> clearAll() async {
+    _database.clear();
+    await _persist();
   }
 
   static String _formatDate(DateTime dt) => '${dt.day}/${dt.month}/${dt.year}';
