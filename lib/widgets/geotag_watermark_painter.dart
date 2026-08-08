@@ -129,7 +129,7 @@ class GeotagWatermarkOverlay extends StatelessWidget {
                 // Google Maps Satellite Thumbnail Preview Box
                 Container(
                   width: 95,
-                  height: 95,
+                  height: 105,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.white54, width: 1.2),
@@ -238,41 +238,51 @@ class GeotagWatermarkOverlay extends StatelessWidget {
 
                       const SizedBox(height: 2),
 
-                      // City, State, Country Header Line
+                      // Line 1: City, State, Country Header
                       Text(
                         '${geo.city}, ${geo.state}, ${geo.country} 🇮🇳',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 12.5,
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.2,
                         ),
                       ),
 
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 2),
 
-                      // Full Detailed Street Address (Multi-line)
+                      // Line 2: Detailed Street & Sublocality Line 1
                       Text(
-                        geo.fullFormattedAddress,
-                        maxLines: 2,
+                        '${geo.addressLine1},',
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 10,
-                          height: 1.2,
                         ),
                       ),
 
-                      const SizedBox(height: 4),
+                      // Line 3: City, State Pincode, Country Line 2
+                      Text(
+                        geo.addressLine2,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 10,
+                        ),
+                      ),
 
-                      // Latitude & Longitude Line
+                      const SizedBox(height: 3),
+
+                      // Line 4: Latitude & Longitude Line
                       Text(
                         'Lat ${photo.latitude.abs().toStringAsFixed(6)}° Long ${photo.longitude.abs().toStringAsFixed(6)}°',
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 10,
+                          fontSize: 9.5,
                           fontWeight: FontWeight.w600,
                           fontFamily: 'monospace',
                         ),
@@ -280,14 +290,14 @@ class GeotagWatermarkOverlay extends StatelessWidget {
 
                       const SizedBox(height: 2),
 
-                      // Day, Full Date & GMT Timestamp Line
+                      // Line 5: Day, Full Date & GMT Timestamp Line
                       Text(
                         '${_dayOfWeek(photo.timestamp)}, ${_formatDateSlash(photo.timestamp)} ${_formatTimeAmPm(photo.timestamp)} ${geo.timeZoneOffset.replaceAll('UTC', 'GMT')}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white70,
-                          fontSize: 9.5,
+                          fontSize: 9,
                         ),
                       ),
                     ],

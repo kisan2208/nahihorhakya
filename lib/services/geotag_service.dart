@@ -46,6 +46,20 @@ class GeotagData {
     return '${latitude.abs().toStringAsFixed(6)}° $latDir, ${longitude.abs().toStringAsFixed(6)}° $lngDir';
   }
 
+  /// Line 1 of street address (Street & Locality)
+  String get addressLine1 {
+    final parts = [
+      if (streetAddress.isNotEmpty) streetAddress,
+      if (locality.isNotEmpty && locality != streetAddress) locality,
+    ];
+    return parts.isNotEmpty ? parts.join(', ') : 'Veera Desai Rd, Andheri West';
+  }
+
+  /// Line 2 of street address (City, State, Zip, Country)
+  String get addressLine2 {
+    return '$city, $state $postalCode, $country'.trim();
+  }
+
   /// Full Google Maps formatted street address for geotag watermark stamp.
   String get fullFormattedAddress {
     if (formattedGoogleAddress.isNotEmpty) {
@@ -86,7 +100,7 @@ class GeotagData {
       longitude: lng,
       altitude: 12.0,
       accuracyMeters: 2.4,
-      formattedGoogleAddress: 'Veera Desai Rd, Andheri West, Mumbai, Maharashtra 400053, India',
+      formattedGoogleAddress: '177, Veera Desai Rd, Jeevan Nagar, Andheri West, Mumbai, Maharashtra 400053, India',
       streetAddress: '177, Veera Desai Rd',
       locality: 'Jeevan Nagar, Andheri West',
       city: 'Mumbai',
