@@ -162,12 +162,17 @@ class GeotagService {
   }
 
   /// Captures real-time accurate location and reverse-geocodes address.
-  /// Pass [googleApiKey] for Google Maps Geocoding (most accurate).
+  /// Uses geocode.maps.co as primary geocoding API for detailed street addresses.
   Future<GeotagData> captureRealGeotag({
     double? forcedLat,
     double? forcedLng,
     String? googleApiKey,
   }) async {
+    // ── Geocode.maps.co API key — loaded securely from build environment ────────
+    // Local build:  flutter build apk --dart-define=MAPS_CO_API_KEY=your_key_here
+    // GitHub CI:    set via repository secret MAPS_CO_API_KEY (see .github/workflows)
+    const mapsCoApiKey = String.fromEnvironment('MAPS_CO_API_KEY', defaultValue: '');
+
     final now = DateTime.now();
     final tzOffset = _formatTzOffset(now.timeZoneOffset);
     final tzName = now.timeZoneName;
@@ -228,8 +233,75 @@ class GeotagService {
     String country = '';
     String postalCode = '';
 
-    // 2a. Google Maps Geocoding API (most accurate, requires API key)
-    if (googleApiKey != null && googleApiKey.isNotEmpty && !kIsWeb) {
+    // 2a. geocode.maps.co — PRIMARY (free, OSM data, reliable, no payment needed)
+    if (!kIsWeb) {
+      try {
+        final client = HttpClient();
+        final uri = Uri.parse(
+          'https://geocode.maps.co/reverse'
+          '?lat=$lat&lon=$lng&api_key=$mapsCoApiKey',
+        );
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 8));
+        req.headers.set('Accept', 'application/json');
+        req.headers.set('Accept-Language', 'en');
+        final res = await req.close();
+        if (res.statusCode == 200) {
+          final body = await res.transform(utf8.decoder).join();
+          final data = json.decode(body) as Map<String, dynamic>;
+          final address = data['address'] as Map<String, dynamic>?;
+          if (address != null) {
+            // Build street: house_number + road/pedestrian/path
+            final houseNum = address['house_number'] as String? ?? '';
+            final road = address['road'] as String?
+                ?? address['pedestrian'] as String?
+                ?? address['footway'] as String?
+                ?? address['path'] as String?
+                ?? address['street'] as String?
+                ?? '';
+            street = [
+              if (houseNum.isNotEmpty) houseNum,
+              if (road.isNotEmpty) road,
+            ].join(', ');
+
+            // Build locality: neighbourhood > quarter > suburb > city_district
+            locality = address['neighbourhood'] as String?
+                ?? address['quarter'] as String?
+                ?? address['suburb'] as String?
+                ?? address['city_district'] as String?
+                ?? address['residential'] as String?
+                ?? '';
+
+            city = address['city'] as String?
+                ?? address['town'] as String?
+                ?? address['village'] as String?
+                ?? address['municipality'] as String?
+                ?? address['county'] as String?
+                ?? '';
+
+            state = address['state'] as String? ?? '';
+            country = address['country'] as String? ?? '';
+            postalCode = address['postcode'] as String? ?? '';
+
+            // Use the full display_name as formatted address if individual parts found
+            final addrParts = <String>[
+              if (street.isNotEmpty) street,
+              if (locality.isNotEmpty) locality,
+              if (city.isNotEmpty) city,
+              if (state.isNotEmpty) state,
+              if (postalCode.isNotEmpty) postalCode,
+              if (country.isNotEmpty) country,
+            ];
+            if (addrParts.isNotEmpty) {
+              googleFormatted = addrParts.join(', ');
+            }
+          }
+        }
+        client.close();
+      } catch (_) {}
+    }
+
+    // 2b. Google Maps Geocoding API (most accurate, requires API key)
+    if (googleFormatted.isEmpty && googleApiKey != null && googleApiKey.isNotEmpty && !kIsWeb) {
       try {
         final client = HttpClient();
         final uri = Uri.parse(
@@ -274,7 +346,7 @@ class GeotagService {
       } catch (_) {}
     }
 
-    // 2b. OpenStreetMap Nominatim (free, no key needed — primary fallback)
+    // 2c. OpenStreetMap Nominatim (free, no key needed — secondary fallback)
     if (googleFormatted.isEmpty && !kIsWeb) {
       try {
         final client = HttpClient();

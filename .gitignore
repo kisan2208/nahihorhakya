@@ -43,3 +43,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# ── Security: API keys & secrets — NEVER commit these ─────────────────────────
+# Local build scripts containing API keys
+build_local.ps1
+build_local.sh
+build_local.bat
+
+# Environment / secrets files
+.env
+.env.local
+.env.production
+secrets.dart
+lib/config/secrets.dart
+
+# Android signing keystores
+*.jks
+*.keystore
+key.properties
+android/key.properties

@@ -32,8 +32,10 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build Android APK
-        run: flutter build apk --release --no-tree-shake-icons
+      - name: Build Android APK (with secure API keys from GitHub Secrets)
+        run: |
+          flutter build apk --release --no-tree-shake-icons \
+            --dart-define=MAPS_CO_API_KEY=${{ secrets.MAPS_CO_API_KEY }}
 
       - name: Upload APK to GitHub Artifacts
         uses: actions/upload-artifact@v4
