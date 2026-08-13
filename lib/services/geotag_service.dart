@@ -50,7 +50,8 @@ class GeotagData {
   String get addressLine1 {
     final parts = <String>[
       if (streetAddress.isNotEmpty) streetAddress,
-      if (locality.isNotEmpty && locality != streetAddress && locality != city) locality,
+      if (locality.isNotEmpty && locality != streetAddress && locality != city)
+        locality,
     ];
     // Return empty if no real data — never return hardcoded fake addresses
     return parts.isNotEmpty ? parts.join(', ') : city;
@@ -97,8 +98,18 @@ class GeotagData {
 
   static String _monthName(int m) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return months[(m - 1) % 12];
   }
@@ -122,6 +133,28 @@ class GeotagData {
       timeZoneName: now.timeZoneName,
       timeZoneOffset: tzOffset,
       isRealHardwareGPS: false,
+    );
+  }
+
+  /// Preserves the cached GPS/address lookup but updates the timestamp at the
+  /// exact moment the shutter is pressed.
+  GeotagData withCaptureTimestamp(DateTime capturedAt) {
+    return GeotagData(
+      latitude: latitude,
+      longitude: longitude,
+      altitude: altitude,
+      accuracyMeters: accuracyMeters,
+      formattedGoogleAddress: formattedGoogleAddress,
+      streetAddress: streetAddress,
+      locality: locality,
+      city: city,
+      state: state,
+      country: country,
+      postalCode: postalCode,
+      timestamp: capturedAt,
+      timeZoneName: capturedAt.timeZoneName,
+      timeZoneOffset: _formatTzOffsetStatic(capturedAt.timeZoneOffset),
+      isRealHardwareGPS: isRealHardwareGPS,
     );
   }
 
@@ -167,11 +200,15 @@ class GeotagService {
     double? forcedLat,
     double? forcedLng,
     String? googleApiKey,
+    bool requestPermission = true,
   }) async {
     // ── Geocode.maps.co API key — loaded securely from build environment ────────
     // Local build:  flutter build apk --dart-define=MAPS_CO_API_KEY=your_key_here
     // GitHub CI:    set via repository secret MAPS_CO_API_KEY (see .github/workflows)
-    const mapsCoApiKey = String.fromEnvironment('MAPS_CO_API_KEY', defaultValue: '');
+    const mapsCoApiKey = String.fromEnvironment(
+      'MAPS_CO_API_KEY',
+      defaultValue: '',
+    );
 
     final now = DateTime.now();
     final tzOffset = _formatTzOffset(now.timeZoneOffset);
@@ -185,7 +222,9 @@ class GeotagService {
 
     // ── Step 1: Get real GPS coordinates ──────────────────────────────────────
     if (forcedLat == null && forcedLng == null && !kIsWeb) {
-      final hasPerm = await requestLocationPermission();
+      final hasPerm = requestPermission
+          ? await requestLocationPermission()
+          : await _hasLocationPermission();
       if (hasPerm) {
         try {
           final pos = await Geolocator.getCurrentPosition(
@@ -241,7 +280,8 @@ class GeotagService {
           'https://geocode.maps.co/reverse'
           '?lat=$lat&lon=$lng&api_key=$mapsCoApiKey',
         );
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 8));
+        final req =
+            await client.getUrl(uri).timeout(const Duration(seconds: 8));
         req.headers.set('Accept', 'application/json');
         req.headers.set('Accept-Language', 'en');
         final res = await req.close();
@@ -252,31 +292,31 @@ class GeotagService {
           if (address != null) {
             // Build street: house_number + road/pedestrian/path
             final houseNum = address['house_number'] as String? ?? '';
-            final road = address['road'] as String?
-                ?? address['pedestrian'] as String?
-                ?? address['footway'] as String?
-                ?? address['path'] as String?
-                ?? address['street'] as String?
-                ?? '';
+            final road = address['road'] as String? ??
+                address['pedestrian'] as String? ??
+                address['footway'] as String? ??
+                address['path'] as String? ??
+                address['street'] as String? ??
+                '';
             street = [
               if (houseNum.isNotEmpty) houseNum,
               if (road.isNotEmpty) road,
             ].join(', ');
 
             // Build locality: neighbourhood > quarter > suburb > city_district
-            locality = address['neighbourhood'] as String?
-                ?? address['quarter'] as String?
-                ?? address['suburb'] as String?
-                ?? address['city_district'] as String?
-                ?? address['residential'] as String?
-                ?? '';
+            locality = address['neighbourhood'] as String? ??
+                address['quarter'] as String? ??
+                address['suburb'] as String? ??
+                address['city_district'] as String? ??
+                address['residential'] as String? ??
+                '';
 
-            city = address['city'] as String?
-                ?? address['town'] as String?
-                ?? address['village'] as String?
-                ?? address['municipality'] as String?
-                ?? address['county'] as String?
-                ?? '';
+            city = address['city'] as String? ??
+                address['town'] as String? ??
+                address['village'] as String? ??
+                address['municipality'] as String? ??
+                address['county'] as String? ??
+                '';
 
             state = address['state'] as String? ?? '';
             country = address['country'] as String? ?? '';
@@ -301,14 +341,18 @@ class GeotagService {
     }
 
     // 2b. Google Maps Geocoding API (most accurate, requires API key)
-    if (googleFormatted.isEmpty && googleApiKey != null && googleApiKey.isNotEmpty && !kIsWeb) {
+    if (googleFormatted.isEmpty &&
+        googleApiKey != null &&
+        googleApiKey.isNotEmpty &&
+        !kIsWeb) {
       try {
         final client = HttpClient();
         final uri = Uri.parse(
           'https://maps.googleapis.com/maps/api/geocode/json'
           '?latlng=$lat,$lng&key=$googleApiKey&language=en',
         );
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 5));
+        final req =
+            await client.getUrl(uri).timeout(const Duration(seconds: 5));
         final res = await req.close();
         if (res.statusCode == 200) {
           final body = await res.transform(utf8.decoder).join();
@@ -318,12 +362,15 @@ class GeotagService {
             if (results.isNotEmpty) {
               googleFormatted = results[0]['formatted_address'] ?? '';
               // Parse individual address components
-              final components = results[0]['address_components'] as List? ?? [];
+              final components =
+                  results[0]['address_components'] as List? ?? [];
               for (final comp in components) {
                 final types = (comp['types'] as List).cast<String>();
                 final value = comp['long_name'] as String? ?? '';
                 if (types.contains('street_number')) {
-                  street = value.isNotEmpty ? '$value ${street.isEmpty ? "" : street}' : street;
+                  street = value.isNotEmpty
+                      ? '$value ${street.isEmpty ? "" : street}'
+                      : street;
                 } else if (types.contains('route')) {
                   street = street.isEmpty ? value : '$street $value';
                 } else if (types.contains('sublocality_level_1') ||
@@ -354,8 +401,12 @@ class GeotagService {
           'https://nominatim.openstreetmap.org/reverse'
           '?lat=$lat&lon=$lng&format=json&addressdetails=1&zoom=18',
         );
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 6));
-        req.headers.set('User-Agent', 'GreenCreditApp/1.0 (contact@greencredit.app)');
+        final req =
+            await client.getUrl(uri).timeout(const Duration(seconds: 6));
+        req.headers.set(
+          'User-Agent',
+          'GreenCreditApp/1.0 (contact@greencredit.app)',
+        );
         req.headers.set('Accept-Language', 'en');
         final res = await req.close();
         if (res.statusCode == 200) {
@@ -365,28 +416,28 @@ class GeotagService {
           if (address != null) {
             // Build street: house_number + road/street
             final houseNum = address['house_number'] as String? ?? '';
-            final road = address['road'] as String?
-                ?? address['pedestrian'] as String?
-                ?? address['footway'] as String?
-                ?? address['path'] as String?
-                ?? '';
+            final road = address['road'] as String? ??
+                address['pedestrian'] as String? ??
+                address['footway'] as String? ??
+                address['path'] as String? ??
+                '';
             street = [
               if (houseNum.isNotEmpty) houseNum,
               if (road.isNotEmpty) road,
             ].join(', ');
 
             // Build locality: neighbourhood > suburb > city_district > town
-            locality = address['neighbourhood'] as String?
-                ?? address['suburb'] as String?
-                ?? address['city_district'] as String?
-                ?? address['quarter'] as String?
-                ?? '';
+            locality = address['neighbourhood'] as String? ??
+                address['suburb'] as String? ??
+                address['city_district'] as String? ??
+                address['quarter'] as String? ??
+                '';
 
-            city = address['city'] as String?
-                ?? address['town'] as String?
-                ?? address['municipality'] as String?
-                ?? address['county'] as String?
-                ?? '';
+            city = address['city'] as String? ??
+                address['town'] as String? ??
+                address['municipality'] as String? ??
+                address['county'] as String? ??
+                '';
 
             state = address['state'] as String? ?? '';
             country = address['country'] as String? ?? '';
@@ -416,20 +467,27 @@ class GeotagService {
           'https://api.bigdatacloud.net/data/reverse-geocode-client'
           '?latitude=$lat&longitude=$lng&localityLanguage=en',
         );
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 5));
+        final req =
+            await client.getUrl(uri).timeout(const Duration(seconds: 5));
         final res = await req.close();
         if (res.statusCode == 200) {
           final body = await res.transform(utf8.decoder).join();
           final data = json.decode(body) as Map<String, dynamic>;
           if (city.isEmpty) city = data['city'] as String? ?? '';
           if (locality.isEmpty) {
-            locality = data['locality'] as String?
-                ?? data['subLocality'] as String?
-                ?? '';
+            locality = data['locality'] as String? ??
+                data['subLocality'] as String? ??
+                '';
           }
-          if (state.isEmpty) state = data['principalSubdivision'] as String? ?? '';
-          if (country.isEmpty) country = data['countryName'] as String? ?? '';
-          if (postalCode.isEmpty) postalCode = data['postcode'] as String? ?? '';
+          if (state.isEmpty) {
+            state = data['principalSubdivision'] as String? ?? '';
+          }
+          if (country.isEmpty) {
+            country = data['countryName'] as String? ?? '';
+          }
+          if (postalCode.isEmpty) {
+            postalCode = data['postcode'] as String? ?? '';
+          }
 
           if (city.isNotEmpty) {
             googleFormatted = <String>[
@@ -500,11 +558,19 @@ class GeotagService {
   static _RegionalInfo _resolveLocationFromCoordinates(double lat, double lng) {
     // Mumbai Region
     if (lat >= 18.80 && lat <= 19.35 && lng >= 72.75 && lng <= 73.15) {
-      return _RegionalInfo(city: 'Mumbai', state: 'Maharashtra', country: 'India');
+      return _RegionalInfo(
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        country: 'India',
+      );
     }
     // Pune Region
     if (lat >= 18.35 && lat <= 18.75 && lng >= 73.70 && lng <= 74.00) {
-      return _RegionalInfo(city: 'Pune', state: 'Maharashtra', country: 'India');
+      return _RegionalInfo(
+        city: 'Pune',
+        state: 'Maharashtra',
+        country: 'India',
+      );
     }
     // Delhi NCR Region
     if (lat >= 28.30 && lat <= 28.90 && lng >= 76.80 && lng <= 77.50) {
@@ -512,23 +578,43 @@ class GeotagService {
     }
     // Bengaluru Region
     if (lat >= 12.80 && lat <= 13.20 && lng >= 77.40 && lng <= 77.80) {
-      return _RegionalInfo(city: 'Bengaluru', state: 'Karnataka', country: 'India');
+      return _RegionalInfo(
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        country: 'India',
+      );
     }
     // Hyderabad Region
     if (lat >= 17.20 && lat <= 17.65 && lng >= 78.20 && lng <= 78.75) {
-      return _RegionalInfo(city: 'Hyderabad', state: 'Telangana', country: 'India');
+      return _RegionalInfo(
+        city: 'Hyderabad',
+        state: 'Telangana',
+        country: 'India',
+      );
     }
     // Chennai Region
     if (lat >= 12.80 && lat <= 13.25 && lng >= 80.10 && lng <= 80.35) {
-      return _RegionalInfo(city: 'Chennai', state: 'Tamil Nadu', country: 'India');
+      return _RegionalInfo(
+        city: 'Chennai',
+        state: 'Tamil Nadu',
+        country: 'India',
+      );
     }
     // Kolkata Region
     if (lat >= 22.40 && lat <= 22.75 && lng >= 88.20 && lng <= 88.55) {
-      return _RegionalInfo(city: 'Kolkata', state: 'West Bengal', country: 'India');
+      return _RegionalInfo(
+        city: 'Kolkata',
+        state: 'West Bengal',
+        country: 'India',
+      );
     }
     // Ahmedabad Region
     if (lat >= 22.90 && lat <= 23.15 && lng >= 72.45 && lng <= 72.75) {
-      return _RegionalInfo(city: 'Ahmedabad', state: 'Gujarat', country: 'India');
+      return _RegionalInfo(
+        city: 'Ahmedabad',
+        state: 'Gujarat',
+        country: 'India',
+      );
     }
     // Generic India fallback
     if (lat >= 6.0 && lat <= 37.0 && lng >= 68.0 && lng <= 98.0) {
@@ -542,6 +628,12 @@ class GeotagService {
     final minutes = (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
     final sign = offset.isNegative ? '-' : '+';
     return 'UTC$sign$hours:$minutes';
+  }
+
+  Future<bool> _hasLocationPermission() async {
+    final permission = await Geolocator.checkPermission();
+    return permission != LocationPermission.denied &&
+        permission != LocationPermission.deniedForever;
   }
 }
 

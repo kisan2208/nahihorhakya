@@ -16,7 +16,8 @@ class AIVerificationResult {
     required this.analyzedAt,
   });
 
-  String get formattedPercentage => '${(confidenceScore * 100).toStringAsFixed(1)}%';
+  String get formattedPercentage =>
+      '${(confidenceScore * 100).toStringAsFixed(1)}%';
 
   static AIVerificationResult analyzeImage({
     required String imagePath,
@@ -27,12 +28,14 @@ class AIVerificationResult {
 
     // If camera feed was captured live inside app, verify EXIF and sensor noise
     if (isLiveCamera) {
-      final score = 0.92 + (Random().nextDouble() * 0.07); // 92% - 99% confidence
+      final score =
+          0.92 + (Random().nextDouble() * 0.07); // 92% - 99% confidence
       return AIVerificationResult(
         isRealPhoto: true,
         isAiGenerated: false,
         confidenceScore: double.parse(score.toStringAsFixed(3)),
-        analysisSummary: 'AI Analysis: Authentic human camera capture verified. Optical sensor noise & EXIF intact.',
+        analysisSummary:
+            'AI Analysis: Authentic human camera capture verified. Optical sensor noise & EXIF intact.',
         analyzedAt: now,
       );
     } else {
@@ -43,9 +46,10 @@ class AIVerificationResult {
         isRealPhoto: !isAi,
         isAiGenerated: isAi,
         confidenceScore: score,
-        analysisSummary: isAi
-            ? '⚠️ AI Warning: Synthetic neural textures detected. Image flagged as AI-generated or tampered.'
-            : 'Gallery Upload: Real photo detected but lacks live camera cryptographic seal.',
+        analysisSummary:
+            isAi
+                ? '⚠️ AI Warning: Synthetic neural textures detected. Image flagged as AI-generated or tampered.'
+                : 'Gallery Upload: Real photo detected but lacks live camera cryptographic seal.',
         analyzedAt: now,
       );
     }
@@ -57,12 +61,14 @@ class AIVerificationService {
   Future<AIVerificationResult> verifyPhotoIntegrity({
     required String imagePath,
     required bool isLiveCamera,
-  }) async {
-    // Simulates AI deep learning inspection model
-    await Future.delayed(const Duration(milliseconds: 300));
-    return AIVerificationResult.analyzeImage(
-      imagePath: imagePath,
-      isLiveCamera: isLiveCamera,
+  }) {
+    // Keep capture responsive. GPS is collected before the shutter opens and
+    // this lightweight, on-device placeholder check has no network work.
+    return Future.value(
+      AIVerificationResult.analyzeImage(
+        imagePath: imagePath,
+        isLiveCamera: isLiveCamera,
+      ),
     );
   }
 }

@@ -1,6 +1,8 @@
 import 'dart:io';
+
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:image_picker/image_picker.dart' as picker;
 
 import '../models/action_category.dart';
 import '../models/authentic_geo_photo.dart';
@@ -8,10 +10,11 @@ import '../services/ai_verification_service.dart';
 import '../services/eco_action_backend.dart';
 import '../services/geotag_service.dart';
 import '../theme.dart';
-import '../glass.dart';
 import '../widgets/geotag_watermark_painter.dart';
 
-/// Screen using real physical hardware camera capture, Google Maps Location & time tracking.
+/// GPS Map Camera-style capture flow. The camera and GPS warm up when this
+/// screen opens, so pressing the shutter does not re-request location or make
+/// a reverse-geocoding request.
 class AuthenticCaptureScreen extends StatefulWidget {
   const AuthenticCaptureScreen({super.key});
 
@@ -19,147 +22,192 @@ class AuthenticCaptureScreen extends StatefulWidget {
   State<AuthenticCaptureScreen> createState() => _AuthenticCaptureScreenState();
 }
 
-class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
-  final ImagePicker _picker = ImagePicker();
+class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen>
+    with WidgetsBindingObserver {
   final EcoActionBackend _backend = EcoActionBackend();
   final AIVerificationService _aiService = AIVerificationService();
   final GeotagService _geotagService = GeotagService();
+  final picker.ImagePicker _fallbackPicker = picker.ImagePicker();
+
+  CameraController? _cameraController;
+  List<CameraDescription> _cameras = const [];
+  CameraLensDirection _activeLens = CameraLensDirection.back;
 
   late ActionCategory _selectedCategory;
   late GeotagData _currentGeotag;
-  
-  bool _usingSimulatedProximity = false;
-  double _simulatedLat = 18.520420;
-  final double _simulatedLng = 73.856730;
-
   late ProximityCheckResult _proximityResult;
-  
+
   AuthenticGeoPhoto? _firstPhoto;
   AuthenticGeoPhoto? _secondPhoto;
 
-  // Geotag is fetched ONCE and cached — not re-fetched on every photo  
-  bool _isLiveCapture = true;
-  bool _isProcessing = false;
-  bool _isLoadingLocation = true;   // shows spinner while GPS+address fetches
+  bool _isLoadingLocation = true;
   bool _hasLocationPermission = true;
+  bool _isCameraInitializing = true;
+  bool _cameraUnavailable = false;
+  bool _isCapturing = false;
+  bool _isUploading = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _selectedCategory = ActionCategory.defaultCategory;
     _currentGeotag = GeotagData.defaultFallback();
     _evaluateProximity();
-    _initBackendAndLocation();
+    _prepareCapture();
   }
 
-  Future<void> _initBackendAndLocation() async {
-    // Initialize backend (loads persisted eco-actions from device storage)
+  /// Start independent setup work together. Neither the camera preview nor GPS
+  /// loading waits for persisted activity data to be read.
+  Future<void> _prepareCapture() async {
+    _initializeCamera();
+    _fetchRealGeotag();
     await _backend.initialize();
-    // Then fetch real GPS location + address
-    await _fetchRealGeotag();
+    if (mounted) {
+      setState(_evaluateProximity);
+    }
+  }
+
+  Future<void> _initializeCamera({CameraLensDirection? preferredLens}) async {
+    if (_isCameraInitializing && _cameraController != null) return;
+
+    if (mounted) {
+      setState(() {
+        _isCameraInitializing = true;
+        _cameraUnavailable = false;
+      });
+    }
+
+    try {
+      _cameras = _cameras.isEmpty ? await availableCameras() : _cameras;
+      if (_cameras.isEmpty) {
+        throw CameraException('no_camera', 'No camera is available.');
+      }
+
+      final direction = preferredLens ?? _activeLens;
+      final description = _cameras.firstWhere(
+        (camera) => camera.lensDirection == direction,
+        orElse: () => _cameras.first,
+      );
+      final previousController = _cameraController;
+      _cameraController = null;
+      await previousController?.dispose();
+
+      final controller = CameraController(
+        description,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+      await controller.initialize();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _cameraController = controller;
+        _activeLens = description.lensDirection;
+        _isCameraInitializing = false;
+      });
+    } on CameraException {
+      if (mounted) {
+        setState(() {
+          _cameraUnavailable = true;
+          _isCameraInitializing = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _cameraUnavailable = true;
+          _isCameraInitializing = false;
+        });
+      }
+    }
   }
 
   Future<void> _fetchRealGeotag() async {
     if (mounted) setState(() => _isLoadingLocation = true);
 
-    // Request permission and fetch GPS + reverse-geocoded address once
-    final permGranted = await _geotagService.requestLocationPermission();
-    final geo = await _geotagService.captureRealGeotag(
-      forcedLat: _usingSimulatedProximity ? _simulatedLat : null,
-      forcedLng: _usingSimulatedProximity ? _simulatedLng : null,
+    // Ask once. captureRealGeotag receives that result and never asks again.
+    final permissionGranted = await _geotagService.requestLocationPermission();
+    final geotag = await _geotagService.captureRealGeotag(
+      requestPermission: false,
     );
 
-    if (mounted) {
-      setState(() {
-        _hasLocationPermission = permGranted;
-        _currentGeotag = geo;
-        _isLoadingLocation = false;
-        _evaluateProximity();
-      });
-    }
+    if (!mounted) return;
+    setState(() {
+      _hasLocationPermission = permissionGranted;
+      _currentGeotag = geotag;
+      _isLoadingLocation = false;
+      _evaluateProximity();
+    });
   }
 
   void _evaluateProximity() {
-    final activeLat = _usingSimulatedProximity ? _simulatedLat : _currentGeotag.latitude;
-    final activeLng = _usingSimulatedProximity ? _simulatedLng : _currentGeotag.longitude;
+    final latitude = _currentGeotag.latitude;
+    final longitude = _currentGeotag.longitude;
 
-    if (_selectedCategory.requiresProximityCheck) {
-      _proximityResult = _backend.check30mProximity(
-        currentLat: activeLat,
-        currentLng: activeLng,
-        categoryId: _selectedCategory.id,
-        radiusMeters: _selectedCategory.proximityRadiusMeters,
-      );
-    } else {
-      _proximityResult = ProximityCheckResult.clear;
-    }
+    _proximityResult = _selectedCategory.requiresProximityCheck
+        ? _backend.check30mProximity(
+            currentLat: latitude,
+            currentLng: longitude,
+            categoryId: _selectedCategory.id,
+            radiusMeters: _selectedCategory.proximityRadiusMeters,
+          )
+        : ProximityCheckResult.clear;
   }
 
-  void _onCategoryChanged(ActionCategory cat) {
+  void _onCategoryChanged(ActionCategory category) {
     setState(() {
-      _selectedCategory = cat;
+      _selectedCategory = category;
       _firstPhoto = null;
       _secondPhoto = null;
       _evaluateProximity();
     });
   }
 
-  /// Takes real camera photo. Uses the CACHED geotag (no re-fetch = no lag).
-  Future<void> _takePhotoWithCamera() async {
+  Future<void> _switchCamera() async {
+    if (_isCameraInitializing || _cameras.length < 2) return;
+    final nextLens = _activeLens == CameraLensDirection.back
+        ? CameraLensDirection.front
+        : CameraLensDirection.back;
+    await _initializeCamera(preferredLens: nextLens);
+  }
+
+  /// Captures from the already-running viewfinder. The only fallback uses the
+  /// system camera if this device cannot start the embedded preview.
+  Future<void> _takePhoto() async {
+    if (_isCapturing || _isLoadingLocation) return;
+
+    setState(() => _isCapturing = true);
     try {
-      final ImageSource source = _isLiveCapture ? ImageSource.camera : ImageSource.gallery;
-      final XFile? pickedFile = await _picker.pickImage(
-        source: source,
-        imageQuality: 90,
-        maxWidth: 1600,
-        maxHeight: 1600,
-      );
+      String? imagePath;
+      final controller = _cameraController;
+      if (controller != null && controller.value.isInitialized) {
+        final photo = await controller.takePicture();
+        imagePath = photo.path;
+      } else {
+        final photo = await _fallbackPicker.pickImage(
+          source: picker.ImageSource.camera,
+          imageQuality: 95,
+        );
+        imagePath = photo?.path;
+      }
 
-      if (pickedFile == null) return;
+      if (imagePath == null || imagePath.isEmpty) {
+        if (mounted) setState(() => _isCapturing = false);
+        return;
+      }
 
-      setState(() => _isProcessing = true);
-
-      // Use the CACHED geotag — no re-fetch here, which was causing lag
-      // User can tap "Refresh Location" button to update geotag manually
-      final realGeotag = _currentGeotag;
-
-      // AI Image Verification only (fast — no GPS/network)
-      final aiResult = await _aiService.verifyPhotoIntegrity(
-        imagePath: pickedFile.path,
-        isLiveCamera: _isLiveCapture,
-      );
-
-      final photo = AuthenticGeoPhoto(
-        id: 'GEO_${DateTime.now().millisecondsSinceEpoch}',
-        category: _selectedCategory,
-        geotag: realGeotag,
-        isLiveCamera: _isLiveCapture,
-        aiVerification: aiResult,
-        imagePath: pickedFile.path,
-      );
-
-      setState(() {
-        _isProcessing = false;
-        if (_selectedCategory.requiresDualPhoto && _firstPhoto == null) {
-          _firstPhoto = photo;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('📸 Step 1 Captured: Product BEFORE Recycling! Now capture Step 2 (AFTER).'),
-              backgroundColor: AppColors.primary,
-            ),
-          );
-        } else if (_selectedCategory.requiresDualPhoto && _firstPhoto != null) {
-          _secondPhoto = photo;
-        } else {
-          _firstPhoto = photo;
-        }
-      });
-    } catch (e) {
-      setState(() => _isProcessing = false);
+      await _registerCapture(imagePath);
+    } catch (error) {
       if (mounted) {
+        setState(() => _isCapturing = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Camera Error: ${e.toString()}'),
+            content: Text('Camera error: $error'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -167,46 +215,114 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     }
   }
 
-  Future<void> _submitToBackend() async {
-    if (_firstPhoto == null) return;
+  Future<void> _registerCapture(String imagePath) async {
+    final captureTime = DateTime.now();
+    final photo = AuthenticGeoPhoto(
+      id: 'GEO_${captureTime.millisecondsSinceEpoch}',
+      category: _selectedCategory,
+      geotag: _currentGeotag.withCaptureTimestamp(captureTime),
+      isLiveCamera: !_cameraUnavailable,
+      imagePath: imagePath,
+      // This local check does not delay the photo screen. A real remote model
+      // can replace the service later without changing this UI flow.
+      aiVerification: await _aiService.verifyPhotoIntegrity(
+        imagePath: imagePath,
+        isLiveCamera: !_cameraUnavailable,
+      ),
+    );
 
-    final finalPhoto = _selectedCategory.requiresDualPhoto && _secondPhoto != null
-        ? AuthenticGeoPhoto(
-            id: _firstPhoto!.id,
-            category: _firstPhoto!.category,
-            geotag: _firstPhoto!.geotag,
-            isLiveCamera: _firstPhoto!.isLiveCamera,
-            aiVerification: _firstPhoto!.aiVerification,
-            imagePath: _firstPhoto!.imagePath,
-            secondaryImagePath: _secondPhoto!.imagePath,
-            secondaryTimestamp: _secondPhoto!.timestamp,
-          )
-        : _firstPhoto!;
+    if (!mounted) return;
+    final needsSecondPhoto =
+        _selectedCategory.requiresDualPhoto && _firstPhoto == null;
+    setState(() {
+      _isCapturing = false;
+      if (needsSecondPhoto) {
+        _firstPhoto = photo;
+      } else if (_selectedCategory.requiresDualPhoto) {
+        _secondPhoto = photo;
+      } else {
+        _firstPhoto = photo;
+      }
+    });
 
-    await _backend.saveAction(finalPhoto);
+    if (needsSecondPhoto && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Before photo captured. Now take the after photo.'),
+          backgroundColor: AppColors.primary,
+        ),
+      );
+    }
+  }
 
-    if (mounted) {
+  Future<void> _uploadAction() async {
+    if (_firstPhoto == null || _isUploading) return;
+
+    final photoToUpload =
+        _selectedCategory.requiresDualPhoto && _secondPhoto != null
+            ? AuthenticGeoPhoto(
+                id: _firstPhoto!.id,
+                category: _firstPhoto!.category,
+                geotag: _firstPhoto!.geotag,
+                isLiveCamera: _firstPhoto!.isLiveCamera,
+                aiVerification: _firstPhoto!.aiVerification,
+                imagePath: _firstPhoto!.imagePath,
+                secondaryImagePath: _secondPhoto!.imagePath,
+                secondaryTimestamp: _secondPhoto!.timestamp,
+              )
+            : _firstPhoto!;
+
+    setState(() => _isUploading = true);
+    try {
+      await _backend.saveAction(photoToUpload);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '✅ Real Photo, Google Geotag & Time saved to backend! Hash: #${finalPhoto.cryptoHash}',
+            'Uploaded to your activity record. Proof #${photoToUpload.cryptoHash}',
           ),
           backgroundColor: AppColors.primary,
         ),
       );
       Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
     }
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final controller = _cameraController;
+    if (controller == null) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _cameraController = null;
+      controller.dispose();
+      if (mounted) setState(() => _isCameraInitializing = true);
+    } else if (state == AppLifecycleState.resumed) {
+      _initializeCamera();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _cameraController?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isDualMode = _selectedCategory.requiresDualPhoto;
-    final isComplete = isDualMode ? (_firstPhoto != null && _secondPhoto != null) : (_firstPhoto != null);
+    final complete = _selectedCategory.requiresDualPhoto
+        ? _firstPhoto != null && _secondPhoto != null
+        : _firstPhoto != null;
 
     return Scaffold(
-      backgroundColor: AppColors.charcoal,
+      backgroundColor: const Color(0xFF050606),
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: const Color(0xE6050606),
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
@@ -214,348 +330,374 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
         ),
         title: Column(
           children: [
-            Text('Authentic Geotag Capture', style: AppTheme.display(16, c: Colors.white)),
+            Text(
+              'Authentic Geotag Capture',
+              style: AppTheme.display(16, c: Colors.white),
+            ),
             const SizedBox(height: 2),
-            Text('Google Maps Location • Real Time', style: AppTheme.body(11, c: Colors.white70)),
+            Text(
+              'GPS Map Camera - Real time proof',
+              style: AppTheme.body(11, c: Colors.white70),
+            ),
           ],
         ),
         centerTitle: true,
       ),
-      body: isComplete ? _buildResultPreviewView() : _buildCameraCaptureView(),
+      body: complete ? _buildResultPreview() : _buildLiveCamera(),
     );
   }
 
-  Widget _buildCameraCaptureView() {
-    final isDualMode = _selectedCategory.requiresDualPhoto;
-    final currentStepLabel = isDualMode
-        ? (_firstPhoto == null ? 'Photo 1 of 2: Take Picture BEFORE Recycling' : 'Photo 2 of 2: Take Picture AFTER Recycling')
-        : 'Tap Shutter to Open Phone Camera';
+  Widget _buildLiveCamera() {
+    final stepLabel = _selectedCategory.requiresDualPhoto
+        ? (_firstPhoto == null
+            ? '1 of 2  -  Capture before recycling'
+            : '2 of 2  -  Capture after recycling')
+        : 'Live GPS camera ready';
+    final canCapture = !_isCapturing && !_isLoadingLocation;
 
     return Stack(
+      fit: StackFit.expand,
       children: [
-        // Camera Viewfinder Background
-        Positioned.fill(
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  _selectedCategory.color.withValues(alpha: 0.35),
-                  const Color(0xFF11170F),
-                ],
-              ),
-            ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Icon(
-                    _selectedCategory.icon,
-                    size: 140,
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-                Center(
-                  child: Container(
-                    width: 280,
-                    height: 340,
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: _proximityResult.hasNearbyAction ? AppColors.danger : AppColors.accent,
-                        width: 2,
-                      ),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.camera_alt_rounded, color: Colors.white.withValues(alpha: 0.6), size: 48),
-                          const SizedBox(height: 12),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Text(
-                              'Tap camera button below to take a real photo with Google Maps Geotag & Time',
-                              textAlign: TextAlign.center,
-                              style: AppTheme.body(12, c: Colors.white70),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+        _buildCameraBackground(),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x4D000000), Color(0x00000000), Color(0xCC000000)],
+              stops: [0, 0.42, 1],
             ),
           ),
         ),
-
-        // Controls Overlay
         SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 8),
-
-              // Category Bar
-              SizedBox(
-                height: 48,
-                child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: ActionCategory.allCategories.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, idx) {
-                    final cat = ActionCategory.allCategories[idx];
-                    final isSelected = cat.id == _selectedCategory.id;
-                    return ChoiceChip(
-                      selected: isSelected,
-                      showCheckmark: false,
-                      avatar: Icon(cat.icon, size: 16, color: isSelected ? Colors.white : cat.color),
-                      label: Text(
-                        cat.title,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.white70,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          fontSize: 12,
-                        ),
-                      ),
-                      selectedColor: cat.color,
-                      backgroundColor: Colors.black45,
-                      side: BorderSide(color: isSelected ? cat.color : Colors.white24),
-                      onSelected: (_) => _onCategoryChanged(cat),
-                    );
-                  },
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppColors.accent),
-                ),
-                child: Text(currentStepLabel, style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white)),
-              ),
-
-              const SizedBox(height: 8),
-
-              // 30m Proximity Banner
-              if (_selectedCategory.requiresProximityCheck && _proximityResult.hasNearbyAction)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.danger.withValues(alpha: 0.95),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 26),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('30m Proximity Duplicate Warning', style: AppTheme.body(12, w: FontWeight.bold, c: Colors.white)),
-                              const SizedBox(height: 2),
-                              Text(_proximityResult.warningMessage, style: AppTheme.body(10.5, c: Colors.white.withValues(alpha: 0.9))),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              const Spacer(),
-
-              // Google Maps Location & Geotag Status Card
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: GlassCard(
-                  radius: 16,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          _isLoadingLocation
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.greenAccent,
-                                  ),
-                                )
-                              : const Icon(Icons.map_rounded, color: Colors.greenAccent, size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _isLoadingLocation
-                                  ? 'Fetching GPS location...'
-                                  : _currentGeotag.formattedCoordinates,
-                              style: AppTheme.body(11, w: FontWeight.bold, c: Colors.white),
-                            ),
-                          ),
-                          InkWell(
-                            onTap: _isLoadingLocation
-                                ? null
-                                : () async {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('📍 Refreshing GPS & address...'),
-                                        duration: Duration(seconds: 1),
-                                      ),
-                                    );
-                                    await _fetchRealGeotag();
-                                  },
-                            borderRadius: BorderRadius.circular(10),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.greenAccent),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 11),
-                                  const SizedBox(width: 3),
-                                  Text(
-                                    _isLoadingLocation
-                                        ? 'Loading...'
-                                        : (_hasLocationPermission ? 'Refresh Location' : 'Enable GPS'),
-                                    style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _currentGeotag.fullFormattedAddress,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white70, fontSize: 10.5),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          const Icon(Icons.access_time_rounded, color: Colors.white54, size: 12),
-                          const SizedBox(width: 6),
-                          Text(
-                            _currentGeotag.formattedDateTime,
-                            style: const TextStyle(color: Colors.white54, fontSize: 10),
-                          ),
-                        ],
-                      ),
-                      if (_selectedCategory.requiresProximityCheck)
-                        Row(
-                          children: [
-                            Text('Proximity Test Slider:', style: AppTheme.body(11, c: Colors.white70)),
-                            Expanded(
-                              child: Slider(
-                                value: _simulatedLat,
-                                min: 18.52040,
-                                max: 18.52180,
-                                activeColor: AppColors.accent,
-                                onChanged: (val) {
-                                  setState(() {
-                                    _simulatedLat = val;
-                                    _usingSimulatedProximity = true;
-                                    _evaluateProximity();
-                                  });
-                                },
-                              ),
-                            ),
-                            Text(
-                              _proximityResult.hasNearbyAction ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m' : '>30m Clear',
-                              style: TextStyle(
-                                color: _proximityResult.hasNearbyAction ? Colors.amber : Colors.greenAccent,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Hardware Shutter Button
-              Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        _isLiveCapture ? Icons.camera_alt_rounded : Icons.photo_library_rounded,
-                        color: _isLiveCapture ? AppColors.accent : Colors.orangeAccent,
-                      ),
-                      onPressed: () {
-                        setState(() => _isLiveCapture = !_isLiveCapture);
-                      },
-                    ),
-
-                    GestureDetector(
-                      onTap: _isProcessing ? null : _takePhotoWithCamera,
-                      child: Container(
-                        width: 78,
-                        height: 78,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
-                            width: 4,
-                          ),
-                          color: Colors.white.withValues(alpha: 0.2),
-                        ),
-                        child: Container(
-                          margin: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
-                            shape: BoxShape.circle,
-                          ),
-                          child: _isProcessing
-                              ? const Padding(
-                                  padding: EdgeInsets.all(16),
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
-                                )
-                              : Icon(
-                                  Icons.camera_alt_rounded,
-                                  color: _proximityResult.hasNearbyAction ? Colors.white : _selectedCategory.color,
-                                  size: 34,
-                                ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(width: 48),
-                  ],
-                ),
-              ),
-            ],
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              children: [
+                _buildCategoryStrip(),
+                const SizedBox(height: 10),
+                _buildStepPill(stepLabel),
+                if (_selectedCategory.requiresProximityCheck &&
+                    _proximityResult.hasNearbyAction) ...[
+                  const SizedBox(height: 10),
+                  _buildProximityWarning(),
+                ],
+                const Spacer(),
+                _buildLocationCard(),
+                const SizedBox(height: 18),
+                _buildCameraControls(canCapture),
+              ],
+            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildResultPreviewView() {
-    final isDualMode = _selectedCategory.requiresDualPhoto;
+  Widget _buildCameraBackground() {
+    final controller = _cameraController;
+    if (controller != null && controller.value.isInitialized) {
+      return Container(
+        color: Colors.black,
+        child: Center(
+          child: AspectRatio(
+            aspectRatio: controller.value.aspectRatio,
+            child: CameraPreview(controller),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      color: const Color(0xFF101212),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_isCameraInitializing)
+            const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                color: Colors.white70,
+                strokeWidth: 2,
+              ),
+            )
+          else
+            const Icon(
+              Icons.camera_alt_outlined,
+              color: Colors.white54,
+              size: 42,
+            ),
+          const SizedBox(height: 12),
+          Text(
+            _isCameraInitializing
+                ? 'Opening secure camera...'
+                : 'Camera preview unavailable',
+            style: AppTheme.body(13, c: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryStrip() {
+    return SizedBox(
+      height: 43,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: ActionCategory.allCategories.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final category = ActionCategory.allCategories[index];
+          final selected = category.id == _selectedCategory.id;
+          return ChoiceChip(
+            selected: selected,
+            showCheckmark: false,
+            avatar: Icon(
+              category.icon,
+              size: 15,
+              color: selected ? Colors.white : category.color,
+            ),
+            label: Text(
+              category.title,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                fontSize: 11,
+              ),
+            ),
+            selectedColor: category.color.withValues(alpha: 0.90),
+            backgroundColor: Colors.black.withValues(alpha: 0.55),
+            side: BorderSide(color: selected ? Colors.white70 : Colors.white24),
+            onSelected: (_) => _onCategoryChanged(category),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildStepPill(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white38),
+      ),
+      child: Text(
+        label,
+        style: AppTheme.body(11.5, c: Colors.white, w: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _buildProximityWarning() {
+    return Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.white),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              _proximityResult.warningMessage,
+              style: AppTheme.body(10.5, c: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocationCard() {
+    final title = [
+      _currentGeotag.city,
+      _currentGeotag.state,
+      _currentGeotag.country,
+    ].where((part) => part.isNotEmpty).join(', ');
+
+    return Container(
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.80),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white30),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black45,
+            blurRadius: 16,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GeotagMapThumbnail(
+            geotag: _currentGeotag,
+            width: 76,
+            height: 88,
+            borderRadius: 10,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _isLoadingLocation
+                            ? 'Finding current location...'
+                            : (title.isEmpty ? 'Location unavailable' : title),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.body(
+                          12.5,
+                          c: Colors.white,
+                          w: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Refresh location',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      color: Colors.white,
+                      onPressed: _isLoadingLocation ? null : _fetchRealGeotag,
+                      icon: _isLoadingLocation
+                          ? const SizedBox(
+                              width: 15,
+                              height: 15,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white70,
+                              ),
+                            )
+                          : const Icon(Icons.my_location_rounded),
+                    ),
+                  ],
+                ),
+                Text(
+                  _isLoadingLocation
+                      ? 'GPS and address are being cached once.'
+                      : _currentGeotag.addressLine1,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.body(10.5, c: Colors.white70),
+                ),
+                Text(
+                  _isLoadingLocation
+                      ? 'The shutter will unlock as soon as it is ready.'
+                      : _currentGeotag.addressLine2,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.body(10.5, c: Colors.white70),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  _isLoadingLocation
+                      ? 'Authentic GPS tag pending'
+                      : '${_currentGeotag.formattedCoordinates}  |  ${_currentGeotag.formattedDateTime}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9.5,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                if (!_hasLocationPermission) ...[
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Enable location permission to create a verified tag.',
+                    style: TextStyle(color: Color(0xFFFFCC80), fontSize: 9.5),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCameraControls(bool canCapture) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        SizedBox(
+          width: 58,
+          child: IconButton(
+            tooltip: 'Refresh camera',
+            onPressed: _isCameraInitializing ? null : _initializeCamera,
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+          ),
+        ),
+        GestureDetector(
+          onTap: canCapture ? _takePhoto : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 76,
+            height: 76,
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: canCapture ? Colors.white : Colors.white38,
+                width: 4,
+              ),
+              color: Colors.black.withValues(alpha: 0.28),
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: canCapture ? Colors.white : Colors.white38,
+              ),
+              child: Center(
+                child: _isCapturing
+                    ? const SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          color: Colors.black87,
+                        ),
+                      )
+                    : Icon(
+                        Icons.camera_alt_rounded,
+                        color: canCapture ? Colors.black : Colors.black45,
+                        size: 31,
+                      ),
+              ),
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 58,
+          child: IconButton(
+            tooltip: 'Switch camera',
+            onPressed: _cameras.length > 1 && !_isCameraInitializing
+                ? _switchCamera
+                : null,
+            icon: Icon(
+              Icons.cameraswitch_rounded,
+              color: _cameras.length > 1 ? Colors.white : Colors.white38,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildResultPreview() {
+    final dualPhoto = _selectedCategory.requiresDualPhoto;
 
     return SafeArea(
       child: Padding(
@@ -563,39 +705,25 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
         child: Column(
           children: [
             Expanded(
-              child: isDualMode
+              child: dualPhoto
                   ? Column(
                       children: [
                         Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: GeotagWatermarkOverlay(
-                              photo: _firstPhoto!,
-                              customLabel: '1. BEFORE RECYCLE',
-                              child: _displayCapturedImage(_firstPhoto!),
-                            ),
+                          child: _watermarkedPhoto(
+                            _firstPhoto!,
+                            label: '1. Before recycle',
                           ),
                         ),
                         const SizedBox(height: 12),
                         Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: GeotagWatermarkOverlay(
-                              photo: _secondPhoto!,
-                              customLabel: '2. AFTER RECYCLE',
-                              child: _displayCapturedImage(_secondPhoto!),
-                            ),
+                          child: _watermarkedPhoto(
+                            _secondPhoto!,
+                            label: '2. After recycle',
                           ),
                         ),
                       ],
                     )
-                  : ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: GeotagWatermarkOverlay(
-                        photo: _firstPhoto!,
-                        child: _displayCapturedImage(_firstPhoto!),
-                      ),
-                    ),
+                  : _watermarkedPhoto(_firstPhoto!),
             ),
             const SizedBox(height: 16),
             Row(
@@ -604,18 +732,20 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                   child: OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white38),
+                      side: const BorderSide(color: Colors.white54),
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Retake Real Photo'),
-                    onPressed: () {
-                      setState(() {
-                        _firstPhoto = null;
-                        _secondPhoto = null;
-                      });
-                    },
+                    label: const Text('Retake'),
+                    onPressed: _isUploading
+                        ? null
+                        : () => setState(() {
+                              _firstPhoto = null;
+                              _secondPhoto = null;
+                            }),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -625,11 +755,22 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
-                    icon: const Icon(Icons.check_circle_rounded),
-                    label: const Text('Save to Backend'),
-                    onPressed: _submitToBackend,
+                    icon: _isUploading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.cloud_upload_rounded),
+                    label: Text(_isUploading ? 'Uploading...' : 'Upload'),
+                    onPressed: _isUploading ? null : _uploadAction,
                   ),
                 ),
               ],
@@ -640,27 +781,33 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     );
   }
 
+  Widget _watermarkedPhoto(AuthenticGeoPhoto photo, {String? label}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: GeotagWatermarkOverlay(
+        photo: photo,
+        customLabel: label,
+        child: _displayCapturedImage(photo),
+      ),
+    );
+  }
+
   Widget _displayCapturedImage(AuthenticGeoPhoto photo) {
-    if (photo.imagePath != null && photo.imagePath!.isNotEmpty && File(photo.imagePath!).existsSync()) {
+    final imagePath = photo.imagePath;
+    if (imagePath != null &&
+        imagePath.isNotEmpty &&
+        File(imagePath).existsSync()) {
       return Image.file(
-        File(photo.imagePath!),
+        File(imagePath),
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
       );
     }
     return Container(
-      width: double.infinity,
-      color: const Color(0xFF1E281F),
+      color: const Color(0xFF202020),
       child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(photo.category.icon, size: 70, color: photo.category.color),
-            const SizedBox(height: 12),
-            Text(photo.category.title, style: AppTheme.display(16, c: Colors.white)),
-          ],
-        ),
+        child: Icon(photo.category.icon, size: 70, color: Colors.white54),
       ),
     );
   }

@@ -32,37 +32,40 @@ class SavedEcoAction {
   /// Calculates distance in meters from given target coordinates to this saved action.
   double distanceTo(double targetLat, double targetLng) {
     return EcoActionBackend.calculateDistanceMeters(
-      latitude, longitude, targetLat, targetLng,
+      latitude,
+      longitude,
+      targetLat,
+      targetLng,
     );
   }
 
   /// Serialize to JSON map for SharedPreferences persistence.
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'categoryId': categoryId,
-    'latitude': latitude,
-    'longitude': longitude,
-    'timestamp': timestamp.toIso8601String(),
-    'address': address,
-    'cryptoHash': cryptoHash,
-    'aiScore': aiScore,
-    'beforeImagePath': beforeImagePath,
-    'afterImagePath': afterImagePath,
-  };
+        'id': id,
+        'categoryId': categoryId,
+        'latitude': latitude,
+        'longitude': longitude,
+        'timestamp': timestamp.toIso8601String(),
+        'address': address,
+        'cryptoHash': cryptoHash,
+        'aiScore': aiScore,
+        'beforeImagePath': beforeImagePath,
+        'afterImagePath': afterImagePath,
+      };
 
   /// Deserialize from JSON map loaded from SharedPreferences.
   factory SavedEcoAction.fromJson(Map<String, dynamic> json) => SavedEcoAction(
-    id: json['id'] as String,
-    categoryId: json['categoryId'] as String,
-    latitude: (json['latitude'] as num).toDouble(),
-    longitude: (json['longitude'] as num).toDouble(),
-    timestamp: DateTime.parse(json['timestamp'] as String),
-    address: json['address'] as String,
-    cryptoHash: json['cryptoHash'] as String,
-    aiScore: (json['aiScore'] as num).toDouble(),
-    beforeImagePath: json['beforeImagePath'] as String?,
-    afterImagePath: json['afterImagePath'] as String?,
-  );
+        id: json['id'] as String,
+        categoryId: json['categoryId'] as String,
+        latitude: (json['latitude'] as num).toDouble(),
+        longitude: (json['longitude'] as num).toDouble(),
+        timestamp: DateTime.parse(json['timestamp'] as String),
+        address: json['address'] as String,
+        cryptoHash: json['cryptoHash'] as String,
+        aiScore: (json['aiScore'] as num).toDouble(),
+        beforeImagePath: json['beforeImagePath'] as String?,
+        afterImagePath: json['afterImagePath'] as String?,
+      );
 }
 
 /// Result of checking 30m proximity against backend database.
@@ -83,7 +86,8 @@ class ProximityCheckResult {
     hasNearbyAction: false,
     closestDistanceMeters: double.infinity,
     nearbyActions: [],
-    warningMessage: 'Location clear! No existing entries recorded within 30 meters.',
+    warningMessage:
+        'Location clear! No existing entries recorded within 30 meters.',
   );
 }
 
@@ -94,7 +98,11 @@ class EcoActionBackend {
   static const String _prefsKey = 'eco_actions_v1';
   bool _initialized = false;
 
-  EcoActionBackend();
+  /// [seedData] makes the proximity rules deterministic in tests without
+  /// touching the device's persisted activity records.
+  EcoActionBackend({Iterable<SavedEcoAction> seedData = const []}) {
+    _database.addAll(seedData);
+  }
 
   static const double earthRadiusMeters = 6371000.0;
   static const double default30mThreshold = 30.0;
@@ -111,7 +119,8 @@ class EcoActionBackend {
         _database.clear();
         for (final item in jsonList) {
           try {
-            _database.add(SavedEcoAction.fromJson(item as Map<String, dynamic>));
+            _database
+                .add(SavedEcoAction.fromJson(item as Map<String, dynamic>));
           } catch (_) {}
         }
       }
@@ -129,8 +138,10 @@ class EcoActionBackend {
 
   /// Haversine distance formula.
   static double calculateDistanceMeters(
-    double lat1, double lng1,
-    double lat2, double lng2,
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
   ) {
     final dLat = (lat2 - lat1) * (pi / 180.0);
     final dLng = (lng2 - lng1) * (pi / 180.0);
@@ -193,9 +204,9 @@ class EcoActionBackend {
 
     if (nearby.isEmpty) return ProximityCheckResult.clear;
 
-    nearby.sort((a, b) =>
-        a.distanceTo(currentLat, currentLng)
-            .compareTo(b.distanceTo(currentLat, currentLng)));
+    nearby.sort((a, b) => a
+        .distanceTo(currentLat, currentLng)
+        .compareTo(b.distanceTo(currentLat, currentLng)));
 
     final nearest = nearby.first;
     final categoryName =

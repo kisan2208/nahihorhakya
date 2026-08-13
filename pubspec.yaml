@@ -37,6 +37,9 @@ dependencies:
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0
   crypto: ^3.0.3
+  # Keeps the live viewfinder open in GreenCredit instead of launching a
+  # separate camera app after the shutter is pressed.
+  camera: ^0.11.2+1
   image_picker: ^1.1.2
   geolocator: ^13.0.2
   shared_preferences: ^2.3.2
