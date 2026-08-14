@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../theme.dart';
 import '../glass.dart';
 import 'authentic_capture_screen.dart';
+import 'ewaste_recycle_screen.dart';
 
 /// Cadence filtering.
 enum Cadence { weekly, monthly, oneTime }
@@ -154,8 +155,15 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
   }
 
   Widget _card(_Activity a) {
-    void start() => Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const AuthenticCaptureScreen()));
+    void start() {
+      if (a.title == 'Recycle e-waste') {
+        Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const EWasteRecycleScreen()));
+      } else {
+        Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const AuthenticCaptureScreen()));
+      }
+    }
 
     return Semantics(
       button: true,
