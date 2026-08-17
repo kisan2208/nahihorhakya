@@ -44,7 +44,7 @@ class _ActivitiesScreenState extends State<ActivitiesScreen> {
   static const _acts = [
     _Activity(
       icon: Icons.park_rounded,
-      title: 'Plant & maintain a tree',
+      title: 'Plant a Tree',
       reward: 'up to 100 credits',
       proof: 'Geo-photo + 30m check',
       color: AppColors.primary,

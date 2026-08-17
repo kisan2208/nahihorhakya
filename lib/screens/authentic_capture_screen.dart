@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../models/action_category.dart';
 import '../models/authentic_geo_photo.dart';
@@ -12,8 +13,11 @@ import '../glass.dart';
 import '../widgets/geotag_watermark_painter.dart';
 
 /// Screen using real physical hardware camera capture, Google Maps Location & time tracking.
+/// [initialCategory] sets the eco-action category — callers pass it directly so there
+/// is no need for a category-picker bar inside this screen.
 class AuthenticCaptureScreen extends StatefulWidget {
-  const AuthenticCaptureScreen({super.key});
+  final ActionCategory? initialCategory;
+  const AuthenticCaptureScreen({super.key, this.initialCategory});
 
   @override
   State<AuthenticCaptureScreen> createState() => _AuthenticCaptureScreenState();
@@ -25,31 +29,43 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   final AIVerificationService _aiService = AIVerificationService();
   final GeotagService _geotagService = GeotagService();
 
+  // Live camera preview controller — scan detection is disabled (onDetect: null).
+  final MobileScannerController _cameraController = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    autoStart: true,
+  );
+
   late ActionCategory _selectedCategory;
   late GeotagData _currentGeotag;
-  
+
   bool _usingSimulatedProximity = false;
   double _simulatedLat = 18.520420;
   final double _simulatedLng = 73.856730;
 
   late ProximityCheckResult _proximityResult;
-  
+
   AuthenticGeoPhoto? _firstPhoto;
   AuthenticGeoPhoto? _secondPhoto;
 
-  // Geotag is fetched ONCE and cached — not re-fetched on every photo  
+  // Geotag is fetched ONCE and cached — not re-fetched on every photo
   bool _isLiveCapture = true;
   bool _isProcessing = false;
-  bool _isLoadingLocation = true;   // shows spinner while GPS+address fetches
+  bool _isLoadingLocation = true; // shows spinner while GPS+address fetches
   bool _hasLocationPermission = true;
 
   @override
   void initState() {
     super.initState();
-    _selectedCategory = ActionCategory.defaultCategory;
+    _selectedCategory = widget.initialCategory ?? ActionCategory.defaultCategory;
     _currentGeotag = GeotagData.defaultFallback();
     _evaluateProximity();
     _initBackendAndLocation();
+  }
+
+  @override
+  void dispose() {
+    _cameraController.dispose();
+    super.dispose();
   }
 
   Future<void> _initBackendAndLocation() async {
@@ -93,15 +109,6 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
     } else {
       _proximityResult = ProximityCheckResult.clear;
     }
-  }
-
-  void _onCategoryChanged(ActionCategory cat) {
-    setState(() {
-      _selectedCategory = cat;
-      _firstPhoto = null;
-      _secondPhoto = null;
-      _evaluateProximity();
-    });
   }
 
   /// Takes real camera photo. Uses the CACHED geotag (no re-fetch = no lag).
@@ -228,108 +235,107 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   Widget _buildCameraCaptureView() {
     final isDualMode = _selectedCategory.requiresDualPhoto;
     final currentStepLabel = isDualMode
-        ? (_firstPhoto == null ? 'Photo 1 of 2: Take Picture BEFORE Recycling' : 'Photo 2 of 2: Take Picture AFTER Recycling')
+        ? (_firstPhoto == null
+            ? 'Photo 1 of 2: Take Picture BEFORE Recycling'
+            : 'Photo 2 of 2: Take Picture AFTER Recycling')
         : 'Tap Shutter to Open Phone Camera';
 
     return Stack(
       children: [
-        // Camera Viewfinder Background
+        // ── LIVE CAMERA PREVIEW (fills the entire background) ──────────────
         Positioned.fill(
+          child: MobileScanner(
+            controller: _cameraController,
+            // Detection disabled — we only want the live viewfinder, not scanning.
+            onDetect: (_) {},
+            errorBuilder: (context, error, child) {
+              // Fallback gradient if camera permission is denied.
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      _selectedCategory.color.withValues(alpha: 0.35),
+                      const Color(0xFF11170F),
+                    ],
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.videocam_off_rounded, color: Colors.white38, size: 64),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Camera permission required',
+                        style: AppTheme.body(13, c: Colors.white54),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+
+        // Semi-transparent dark scrim so UI elements remain readable.
+        Positioned.fill(
+          child: Container(color: Colors.black.withValues(alpha: 0.35)),
+        ),
+
+        // ── Viewfinder frame ───────────────────────────────────────────────
+        Center(
           child: Container(
+            width: 280,
+            height: 340,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  _selectedCategory.color.withValues(alpha: 0.35),
-                  const Color(0xFF11170F),
-                ],
+              border: Border.all(
+                color: _proximityResult.hasNearbyAction ? AppColors.danger : AppColors.accent,
+                width: 2,
               ),
-            ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Icon(
-                    _selectedCategory.icon,
-                    size: 140,
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-                Center(
-                  child: Container(
-                    width: 280,
-                    height: 340,
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: _proximityResult.hasNearbyAction ? AppColors.danger : AppColors.accent,
-                        width: 2,
-                      ),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.camera_alt_rounded, color: Colors.white.withValues(alpha: 0.6), size: 48),
-                          const SizedBox(height: 12),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Text(
-                              'Tap camera button below to take a real photo with Google Maps Geotag & Time',
-                              textAlign: TextAlign.center,
-                              style: AppTheme.body(12, c: Colors.white70),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              borderRadius: BorderRadius.circular(24),
             ),
           ),
         ),
 
-        // Controls Overlay
+        // ── Controls Overlay ───────────────────────────────────────────────
         SafeArea(
           child: Column(
             children: [
               const SizedBox(height: 8),
 
-              // Category Bar
-              SizedBox(
-                height: 48,
-                child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: ActionCategory.allCategories.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, idx) {
-                    final cat = ActionCategory.allCategories[idx];
-                    final isSelected = cat.id == _selectedCategory.id;
-                    return ChoiceChip(
-                      selected: isSelected,
-                      showCheckmark: false,
-                      avatar: Icon(cat.icon, size: 16, color: isSelected ? Colors.white : cat.color),
-                      label: Text(
-                        cat.title,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.white70,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          fontSize: 12,
-                        ),
-                      ),
-                      selectedColor: cat.color,
-                      backgroundColor: Colors.black45,
-                      side: BorderSide(color: isSelected ? cat.color : Colors.white24),
-                      onSelected: (_) => _onCategoryChanged(cat),
-                    );
-                  },
+              // Category label pill (read-only — no chip bar)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: _selectedCategory.color.withValues(alpha: 0.85),
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _selectedCategory.color.withValues(alpha: 0.4),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(_selectedCategory.icon, size: 16, color: Colors.white),
+                    const SizedBox(width: 6),
+                    Text(
+                      _selectedCategory.title,
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ],
                 ),
               ),
 
               const SizedBox(height: 10),
 
+              // Step label
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
@@ -337,7 +343,8 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: AppColors.accent),
                 ),
-                child: Text(currentStepLabel, style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white)),
+                child: Text(currentStepLabel,
+                    style: AppTheme.body(11.5, w: FontWeight.bold, c: Colors.white)),
               ),
 
               const SizedBox(height: 8),
@@ -360,9 +367,12 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('30m Proximity Duplicate Warning', style: AppTheme.body(12, w: FontWeight.bold, c: Colors.white)),
+                              Text('30m Proximity Duplicate Warning',
+                                  style: AppTheme.body(12, w: FontWeight.bold, c: Colors.white)),
                               const SizedBox(height: 2),
-                              Text(_proximityResult.warningMessage, style: AppTheme.body(10.5, c: Colors.white.withValues(alpha: 0.9))),
+                              Text(_proximityResult.warningMessage,
+                                  style: AppTheme.body(10.5,
+                                      c: Colors.white.withValues(alpha: 0.9))),
                             ],
                           ),
                         ),
@@ -426,13 +436,19 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Icon(Icons.my_location_rounded, color: Colors.greenAccent, size: 11),
+                                  const Icon(Icons.my_location_rounded,
+                                      color: Colors.greenAccent, size: 11),
                                   const SizedBox(width: 3),
                                   Text(
                                     _isLoadingLocation
                                         ? 'Loading...'
-                                        : (_hasLocationPermission ? 'Refresh Location' : 'Enable GPS'),
-                                    style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                        : (_hasLocationPermission
+                                            ? 'Refresh Location'
+                                            : 'Enable GPS'),
+                                    style: const TextStyle(
+                                        color: Colors.greenAccent,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold),
                                   ),
                                 ],
                               ),
@@ -450,7 +466,8 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          const Icon(Icons.access_time_rounded, color: Colors.white54, size: 12),
+                          const Icon(Icons.access_time_rounded,
+                              color: Colors.white54, size: 12),
                           const SizedBox(width: 6),
                           Text(
                             _currentGeotag.formattedDateTime,
@@ -461,7 +478,8 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       if (_selectedCategory.requiresProximityCheck)
                         Row(
                           children: [
-                            Text('Proximity Test Slider:', style: AppTheme.body(11, c: Colors.white70)),
+                            Text('Proximity Test Slider:',
+                                style: AppTheme.body(11, c: Colors.white70)),
                             Expanded(
                               child: Slider(
                                 value: _simulatedLat,
@@ -478,9 +496,13 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                               ),
                             ),
                             Text(
-                              _proximityResult.hasNearbyAction ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m' : '>30m Clear',
+                              _proximityResult.hasNearbyAction
+                                  ? '${_proximityResult.closestDistanceMeters.toStringAsFixed(1)}m'
+                                  : '>30m Clear',
                               style: TextStyle(
-                                color: _proximityResult.hasNearbyAction ? Colors.amber : Colors.greenAccent,
+                                color: _proximityResult.hasNearbyAction
+                                    ? Colors.amber
+                                    : Colors.greenAccent,
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -502,7 +524,9 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                   children: [
                     IconButton(
                       icon: Icon(
-                        _isLiveCapture ? Icons.camera_alt_rounded : Icons.photo_library_rounded,
+                        _isLiveCapture
+                            ? Icons.camera_alt_rounded
+                            : Icons.photo_library_rounded,
                         color: _isLiveCapture ? AppColors.accent : Colors.orangeAccent,
                       ),
                       onPressed: () {
@@ -518,7 +542,9 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
+                            color: _proximityResult.hasNearbyAction
+                                ? AppColors.danger
+                                : Colors.white,
                             width: 4,
                           ),
                           color: Colors.white.withValues(alpha: 0.2),
@@ -526,17 +552,22 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                         child: Container(
                           margin: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
-                            color: _proximityResult.hasNearbyAction ? AppColors.danger : Colors.white,
+                            color: _proximityResult.hasNearbyAction
+                                ? AppColors.danger
+                                : Colors.white,
                             shape: BoxShape.circle,
                           ),
                           child: _isProcessing
                               ? const Padding(
                                   padding: EdgeInsets.all(16),
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                                  child: CircularProgressIndicator(
+                                      color: Colors.white, strokeWidth: 3),
                                 )
                               : Icon(
                                   Icons.camera_alt_rounded,
-                                  color: _proximityResult.hasNearbyAction ? Colors.white : _selectedCategory.color,
+                                  color: _proximityResult.hasNearbyAction
+                                      ? Colors.white
+                                      : _selectedCategory.color,
                                   size: 34,
                                 ),
                         ),
@@ -606,7 +637,8 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       foregroundColor: Colors.white,
                       side: const BorderSide(color: Colors.white38),
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
                     ),
                     icon: const Icon(Icons.refresh_rounded),
                     label: const Text('Retake Real Photo'),
@@ -625,7 +657,8 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
                     ),
                     icon: const Icon(Icons.check_circle_rounded),
                     label: const Text('Save to Backend'),
@@ -641,7 +674,9 @@ class _AuthenticCaptureScreenState extends State<AuthenticCaptureScreen> {
   }
 
   Widget _displayCapturedImage(AuthenticGeoPhoto photo) {
-    if (photo.imagePath != null && photo.imagePath!.isNotEmpty && File(photo.imagePath!).existsSync()) {
+    if (photo.imagePath != null &&
+        photo.imagePath!.isNotEmpty &&
+        File(photo.imagePath!).existsSync()) {
       return Image.file(
         File(photo.imagePath!),
         fit: BoxFit.cover,

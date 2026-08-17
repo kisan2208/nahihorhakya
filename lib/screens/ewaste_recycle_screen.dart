@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -704,25 +704,6 @@ class _BarcodeScanTabState extends State<_BarcodeScanTab> {
                         ),
                       ],
                     ),
-                  ),
-                ],
-              ),
-            ),
-          ] else ...[
-            const SizedBox(height: 16),
-            GlassCard(
-              radius: 16,
-              tint: Colors.orange,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('What to do?', style: AppTheme.body(13, w: FontWeight.w700, c: AppColors.charcoal)),
-                  const SizedBox(height: 8),
-                  Text(
-                    'The barcode was scanned successfully but this device is not yet in our database.\n\n'
-                    'You can still submit by uploading Before & After photos.\n'
-                    'Our team will manually verify and assign credits within 24 hours.',
-                    style: AppTheme.body(12.5, c: AppColors.charcoal),
                   ),
                 ],
               ),

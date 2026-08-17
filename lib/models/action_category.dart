@@ -46,7 +46,7 @@ class ActionCategory {
     ActionCategory(
       type: ActionCategoryType.treePlanted,
       id: 'tree_planted',
-      title: 'Plant & maintain a tree',
+      title: 'Plant a Tree',
       description: 'Planting sapling or tree to restore greenery in your ward',
       reward: 'up to 100 credits',
       badgeText: 'Geo-photo + 30m Check',

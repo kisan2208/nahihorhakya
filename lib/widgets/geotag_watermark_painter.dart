@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/authentic_geo_photo.dart';
 
@@ -126,76 +127,77 @@ class GeotagWatermarkOverlay extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Google Maps Satellite Thumbnail Preview Box
+                // Real OpenStreetMap tile dynamically computed from GPS coordinates
                 Container(
                   width: 95,
                   height: 105,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.white54, width: 1.2),
-                    image: const DecorationImage(
-                      image: NetworkImage(
-                        'https://tile.openstreetmap.org/17/93863/56241.png',
-                      ),
-                      fit: BoxFit.cover,
-                      onError: null,
-                    ),
                     color: const Color(0xFF1E2D1F),
                   ),
-                  child: Stack(
-                    children: [
-                      // Dark Satellite Overlay Grid Pattern
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(9),
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.black.withValues(alpha: 0.1),
-                              Colors.black.withValues(alpha: 0.4),
-                            ],
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(9),
+                    child: Stack(
+                      children: [
+                        // Real OSM tile from actual GPS coordinates
+                        Image.network(
+                          _osmTileUrl(geo.latitude, geo.longitude, 16),
+                          fit: BoxFit.cover,
+                          width: 95,
+                          height: 105,
+                          errorBuilder: (_, __, ___) => Container(
+                            color: const Color(0xFF1E3A1E),
+                            child: const Center(
+                              child: Icon(Icons.map_rounded, color: Colors.white30, size: 32),
+                            ),
                           ),
                         ),
-                      ),
-                      // Center Red Google Pin Marker
-                      const Center(
-                        child: Icon(
-                          Icons.location_on,
-                          color: Colors.redAccent,
-                          size: 32,
-                          shadows: [
-                            Shadow(color: Colors.black87, blurRadius: 6),
-                          ],
-                        ),
-                      ),
-                      // Google Logo Branding at Bottom Left
-                      Positioned(
-                        left: 4,
-                        bottom: 4,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        // Slight dark vignette so pin is readable
+                        Container(
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.65),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'Google',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.3,
-                                ),
-                              ),
-                            ],
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.black.withValues(alpha: 0.05),
+                                Colors.black.withValues(alpha: 0.30),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                        // Red location pin in the centre
+                        const Center(
+                          child: Icon(
+                            Icons.location_on,
+                            color: Colors.redAccent,
+                            size: 32,
+                            shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
+                          ),
+                        ),
+                        // Google logo branding
+                        Positioned(
+                          left: 4,
+                          bottom: 4,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.65),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Google',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
 
@@ -328,5 +330,17 @@ class GeotagWatermarkOverlay extends StatelessWidget {
     final second = dt.second.toString().padLeft(2, '0');
     final amPm = dt.hour >= 12 ? 'PM' : 'AM';
     return '${hour.toString().padLeft(2, '0')}:$minute:$second $amPm';
+  }
+
+  /// Converts GPS lat/lng to an OpenStreetMap tile URL at the given zoom level.
+  static String _osmTileUrl(double lat, double lng, int zoom) {
+    if (lat == 0.0 && lng == 0.0) {
+      return 'https://tile.openstreetmap.org/$zoom/5954/3521.png';
+    }
+    final n = math.pow(2, zoom).toInt();
+    final xTile = ((lng + 180.0) / 360.0 * n).floor();
+    final latRad = lat * math.pi / 180.0;
+    final yTile = ((1.0 - math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi) / 2.0 * n).floor();
+    return 'https://tile.openstreetmap.org/$zoom/$xTile/$yTile.png';
   }
 }

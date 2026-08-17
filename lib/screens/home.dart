@@ -3,8 +3,10 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../theme.dart';
 import '../glass.dart';
 import '../demo_data.dart';
+import '../models/action_category.dart';
 import 'capture.dart';
 import 'authentic_capture_screen.dart';
+import 'ewaste_recycle_screen.dart';
 import 'gci_detail.dart';
 import 'redeem.dart';
 import 'notifications.dart';
@@ -179,15 +181,17 @@ class HomeScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _quickTile(context, Icons.park_rounded, 'Plant a Tree', AppColors.primary,
-                  () => _push(context, const AuthenticCaptureScreen())),
+                  () => _push(context, AuthenticCaptureScreen(
+                        initialCategory: ActionCategory.findById('tree_planted'),
+                      ))),
               const SizedBox(width: 12),
-              // Both of these flow into the same capture + verify path as
-              // trees; they were dead taps before.
-              _quickTile(context, Icons.delete_sweep_rounded, 'Segregate\nWaste',
-                  AppColors.amber, () => _push(context, const CaptureScreen())),
+              _quickTile(context, Icons.recycling_rounded, 'Recycle\nE-Waste',
+                  AppColors.primaryDark, () => _push(context, const EWasteRecycleScreen())),
               const SizedBox(width: 12),
-              _quickTile(context, Icons.qr_code_scanner_rounded, 'Scan Drive\nQR',
-                  AppColors.primaryDark, () => _push(context, const CaptureScreen())),
+              _quickTile(context, Icons.cleaning_services_rounded, 'Cleanliness\nDrive',
+                  AppColors.amber, () => _push(context, AuthenticCaptureScreen(
+                        initialCategory: ActionCategory.findById('beach_clean'),
+                      ))),
             ],
           ),
         ),

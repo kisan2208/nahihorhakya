@@ -118,7 +118,7 @@ class AmbientBackground extends StatelessWidget {
           Positioned(top: -80, left: -60, child: _blob(220, AppColors.accent.withValues(alpha: 0.55))),
           Positioned(top: 120, right: -90, child: _blob(260, AppColors.primary.withValues(alpha: 0.30))),
           Positioned(bottom: -70, left: -40, child: _blob(240, AppColors.primary.withValues(alpha: 0.22))),
-          child,
+                child,
         ],
       ),
     );
